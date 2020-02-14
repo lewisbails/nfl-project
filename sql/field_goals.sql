@@ -7,7 +7,7 @@ case when g.humd>=60 then 1 else 0 end as humid,
 case when g.wspd>=10 then 1 else 0 end as windy,
 case when g.v=p.off then 1 else 0 end as away_game,
 case when g.wk>=10 then 1 else 0 end as postseason,
-case when pp.qtr=p.qtr then pp.timd-p.timd else 0 end as iced,
+case when (pp.qtr=p.qtr) and ((pp.timd-p.timd)>0 or (pp.timo-p.timo)>0) then 1 else 0 end as iced,
 case g.surf when 'Grass' then 0 else 1 end as turf,
 case when g.cond like "%Snow%" then 1 when g.cond like "%Rain%" and not "Chance Rain" then 1 else 0 end as precipitation,
 case when p.qtr=4 and ABS(p.ptso - p.ptsd)>21 then 0
@@ -25,10 +25,10 @@ join kicker k on k.player = fg.fkicker and g.gid=k.gid
 join PLAY pp on pp.pid=p.pid-1 and pp.gid=p.gid
 where fg.fgxp='FG' -- not an xp
 and fg.fkicker in (
-select kicker
-from tenth_attempt) -- has had at least 10 attempts overall
+select fkicker
+from fifty) -- has had at least 50 attempts overall
 and fg.pid > (
 select pid
-from tenth_attempt
-where fg.fkicker = kicker) -- this kick came after the 10th attempt
+from fifty
+where fg.fkicker = fkicker) -- this kick came after the 50th attempt
 order by p.pid

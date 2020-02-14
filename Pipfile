@@ -11,6 +11,7 @@ pandas = "*"
 scikit-learn = "*"
 statsmodels = "*"
 seaborn = "*"
+mysql-connector-python = "*"
 
 [requires]
 python_version = "3.7"
