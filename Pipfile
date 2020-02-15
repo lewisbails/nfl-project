@@ -12,6 +12,7 @@ scikit-learn = "*"
 statsmodels = "*"
 seaborn = "*"
 mysql-connector-python = "*"
+lxml = "*"
 
 [requires]
 python_version = "3.7"
