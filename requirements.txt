@@ -1,0 +1,8 @@
+pandas
+scikit-learn
+statsmodels
+mysql-connector-python
+lxml
+matplotlib
+pymc3
+arviz

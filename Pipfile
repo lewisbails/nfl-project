@@ -12,6 +12,9 @@ statsmodels = "*"
 mysql-connector-python = "*"
 lxml = "*"
 matplotlib = "*"
+pymc3 = "*"
+arviz = "*"
+ipykernel = "*"y
 
 [requires]
 python_version = "3.7"
