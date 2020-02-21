@@ -6,3 +6,4 @@ lxml
 matplotlib
 pymc3
 arviz
+ipykernel

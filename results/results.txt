@@ -1,0 +1,92 @@
+
+Generalized Linear Model Regression Results based on "Going For Three".
+Data are from 2000-2011.
+==============================================================================
+Dep. Variable:                   good   No. Observations:                11901
+Model:                            GLM   Df Residuals:                    11889
+Model Family:                Binomial   Df Model:                           11
+Link Function:                  logit   Scale:                          1.0000
+Method:                        newton   Log-Likelihood:                -5001.9
+Date:                Fri, 14 Feb 2020   Deviance:                       10004.
+Time:                        11:43:39   Pearson chi2:                 1.14e+04
+No. Iterations:                     3                                         
+Covariance Type:            nonrobust                                         
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+Intercept         5.6933      0.139     40.916      0.000       5.421       5.966
+dist             -0.1053      0.003    -35.204      0.000      -0.111      -0.099
+cold             -0.2228      0.057     -3.899      0.000      -0.335      -0.111
+altitude          0.5856      0.158      3.710      0.000       0.276       0.895
+humid            -0.0807      0.055     -1.461      0.144      -0.189       0.028
+windy            -0.2196      0.055     -3.985      0.000      -0.328      -0.112
+away_game        -0.0350      0.050     -0.697      0.486      -0.133       0.063
+postseason       -0.0673      0.054     -1.238      0.216      -0.174       0.039
+iced             -0.1046      0.076     -1.369      0.171      -0.254       0.045
+turf              0.2994      0.055      5.443      0.000       0.192       0.407
+precipitation    -0.1798      0.086     -2.089      0.037      -0.348      -0.011
+pressure         -0.0109      0.108     -0.101      0.920      -0.223       0.201
+=================================================================================
+[-]
+
+Generalized Linear Model Regression Results based on "Going For Three".
+Includes season and year covariates, controls for kickers with <50 kicks (as per paper).
+Data are from 2000-2011.                  
+==============================================================================
+Dep. Variable:                   good   No. Observations:                 8572
+Model:                            GLM   Df Residuals:                     8558
+Model Family:                Binomial   Df Model:                           13
+Link Function:                  logit   Scale:                          1.0000
+Method:                        newton   Log-Likelihood:                -3425.7
+Date:                Fri, 14 Feb 2020   Deviance:                       6851.4
+Time:                        11:44:06   Pearson chi2:                 8.25e+03
+No. Iterations:                     4                                         
+Covariance Type:            nonrobust                                         
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+Intercept       -73.0399     20.541     -3.556      0.000    -113.299     -32.780
+dist             -0.1111      0.004    -30.276      0.000      -0.118      -0.104
+year              0.0394      0.010      3.845      0.000       0.019       0.059
+seasons           0.0113      0.006      1.764      0.078      -0.001       0.024
+cold             -0.2130      0.068     -3.109      0.002      -0.347      -0.079
+altitude          0.6510      0.193      3.375      0.001       0.273       1.029
+humid            -0.0103      0.068     -0.151      0.880      -0.144       0.124
+windy            -0.2988      0.067     -4.451      0.000      -0.430      -0.167
+away_game        -0.1017      0.061     -1.670      0.095      -0.221       0.018
+postseason       -0.1100      0.066     -1.660      0.097      -0.240       0.020
+iced             -0.1156      0.092     -1.251      0.211      -0.297       0.066
+turf              0.2251      0.066      3.408      0.001       0.096       0.355
+precipitation    -0.1593      0.109     -1.457      0.145      -0.374       0.055
+pressure          0.0291      0.132      0.220      0.826      -0.230       0.288
+=================================================================================
+
+
+Generalized Linear Model Regression Results based on "Choking Under the Pressure".
+Data are from 2000-2017 (as per paper).                  
+==============================================================================
+Dep. Variable:                   good   No. Observations:                18166
+Model:                            GLM   Df Residuals:                    18154
+Model Family:                Binomial   Df Model:                           11
+Link Function:                  logit   Scale:                          1.0000
+Method:                        newton   Log-Likelihood:                -7370.5
+Date:                Fri, 14 Feb 2020   Deviance:                       14741.
+Time:                        11:45:31   Pearson chi2:                 1.74e+04
+No. Iterations:                     3                                         
+Covariance Type:            nonrobust                                         
+=================================================================================
+                    coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------
+Intercept         5.7011      0.115     49.681      0.000       5.476       5.926
+dist             -0.1016      0.002    -41.712      0.000      -0.106      -0.097
+cold             -0.1731      0.047     -3.661      0.000      -0.266      -0.080
+altitude          0.3789      0.124      3.044      0.002       0.135       0.623
+humid            -0.1050      0.046     -2.286      0.022      -0.195      -0.015
+windy            -0.2226      0.046     -4.803      0.000      -0.313      -0.132
+away_game        -0.0248      0.042     -0.597      0.551      -0.106       0.057
+postseason       -0.0533      0.045     -1.189      0.235      -0.141       0.035
+iced             -0.1318      0.062     -2.130      0.033      -0.253      -0.010
+turf              0.2822      0.045      6.228      0.000       0.193       0.371
+precipitation    -0.2488      0.074     -3.343      0.001      -0.395      -0.103
+pressure         -0.0338      0.087     -0.387      0.699      -0.205       0.137
+=================================================================================
