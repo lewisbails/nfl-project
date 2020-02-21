@@ -7,3 +7,5 @@ matplotlib
 pymc3
 arviz
 ipykernel
+seaborn
+dtale
