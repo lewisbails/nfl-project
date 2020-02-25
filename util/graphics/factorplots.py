@@ -148,7 +148,7 @@ def interaction_plot(x, trace, response, func=np.mean, ax=None, plottype='b',
             if errorbars:
                 ax.errorbar(group['x'], group['response'],
                             yerr=yerr.loc[yerr['trace'] == values]['response'].values,
-                            color=colors[i], ecolor='black',
+                            color=colors[i], ecolor=colors[i],
                             marker=markers[i], label='',
                             linestyle=linestyles[i], **kwargs)
 

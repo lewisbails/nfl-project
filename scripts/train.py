@@ -1,6 +1,3 @@
-import sys
-sys.path.append('C:\\Users\\Lewis.Bails\\Repositories\\nfl_study')
-from util.stats import summary
 import pymc3 as pm
 import pandas as pd
 import mysql.connector
@@ -8,42 +5,20 @@ import pickle
 from datetime import datetime as dt
 
 
-def get_data(conn):
-    base_query = '''select
-    p.pid,fg.good,fg.dist, 
-    g.seas as year, k.seas as seasons,
-    case when g.temp<50 then 1 else 0 end as cold,
-    case when g.stad like "%Mile High%" then 1 else 0 end as altitude,
-    case when g.humd>=60 then 1 else 0 end as humid,
-    case when g.wspd>=10 then 1 else 0 end as windy,
-    case when g.v=p.off then 1 else 0 end as away_game,
-    case when g.wk>=10 then 1 else 0 end as postseason,
-    case when (pp.qtr=p.qtr) and ((pp.timd-p.timd)>0 or (pp.timo-p.timo)>0) then 1 else 0 end as iced,
-    case g.surf when 'Grass' then 0 else 1 end as turf,
-    case when g.cond like "%Snow%" then 1 when g.cond like "%Rain%" and not "Chance Rain" then 1 else 0 end as precipitation,
-    case when p.qtr=4 and ABS(p.ptso - p.ptsd)>21 then 0
-    when p.qtr=4 and p.min<2 and ABS(p.ptso - p.ptsd)>8 then 0
-    when p.qtr=4 and p.min<2 and p.ptso-p.ptsd < -7 then 0
-    when p.qtr<=3 then 0
-    when p.qtr=4 and p.min>=2 and ABS(p.ptso - p.ptsd)<21 then 0
-    when p.qtr=4 and p.min<2 and p.ptso-p.ptsd >=5 and p.ptso-p.ptsd <=8 then 0
-    when p.qtr=4 and p.min<2 and p.ptso-p.ptsd >=-4 and p.ptso-p.ptsd <=-6 then 0
-    else 1 end as pressure'''
+def get_data(conn, date_condition, where='', xp=False, base='base_query'):
+    query = open(f'../sql/{base}.sql', 'r').read()
+    if not xp:
+        query += '''\nwhere fg.fgxp='FG' -- not an xp'''
 
-    query = base_query + '''
-    from FGXP fg
-    left join PLAY p on fg.pid=p.pid
-    left join game g on p.gid=g.gid
-    join kicker k on k.player = fg.fkicker and g.gid=k.gid
-    join PLAY pp on pp.pid=p.pid-1 and pp.gid=p.gid
-    where fg.fgxp='FG' -- not an xp
-    and g.seas >2017
-    order by p.pid
-    '''
+    query += f'''\n{where}\nand p.blk != 1 -- blocked kicks are completely unpredictable and should not be counted\
+    \nand g.seas {date_condition}\
+    \nand k.seas >= 0 -- some have negative seasons for some reason\
+    \norder by p.pid'''
+
+    # the k.seas>=3 is not necessary if the date_condition is later in the dataset, although it shouldnt affect the data too much,
+    # as most kickers past 3 seasons have had 50 or more kicks.
 
     df = pd.read_sql(query, conn, index_col='pid')
-    df['cold*windy'] = df['cold'] * df['windy']
-    df['postseason*away_game'] = df['postseason'] * df['away_game']
 
     return df
 
@@ -56,7 +31,7 @@ def get_priors(results):
     return priors
 
 
-def train(data, priors, samples=200, tune=500):
+def train(data, priors, samples=1000, tune=1000):
     with pm.Model() as logistic_model:
 
         # from_formula was working so i went with the standard GLM API
@@ -95,21 +70,72 @@ def train(data, priors, samples=200, tune=500):
         return logistic_model, trace
 
 
+def get_interactions(data, res):
+    for i in res.index:
+        if '*' in i:
+            l, r = i.split('*')
+            data[i] = data[l] * data[r]
+
+    return data
+
+
+def feature_engineering(data, res):
+
+    # get interaction features
+    data = get_interactions(data, res)
+
+    # get form feature
+    data['form'] = data.groupby('fkicker')['good'].transform(lambda row: row.ewm(span=5).mean().shift(1))
+    data = data.drop('fkicker', axis=1)
+
+    return data
+
+
 if __name__ == '__main__':
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description='PyMC3 training script.')
+    parser.add_argument('--base', help='base query to use in sql. Usually base_query or six_cat.')
+    parser.add_argument('--xp', help='Include extra points in sql',
+                        default=False, type=bool)
+    parser.add_argument('--date', help='Dates for the sql.')
+    parser.add_argument('--prior', help='Where in results/ to get the info for priors.')
+    args = parser.parse_args()
+    print(f'{args.xp} XP for data {args.date} with {args.base} sql and {args.prior} prior.')
+
     # get training data
     cnx = mysql.connector.connect(user='root', password='mOntie20!mysql', host='127.0.0.1', database='nfl')
-    df = get_data(cnx)
+    where = '''and (
+                (
+                    fg.fkicker in (select fkicker from fifty) -- has had at least 50 attempts overall (this keeps only kickers that would end up making it in the NFL)
+                ) or    
+                (
+                    k.seas>=3  -- or they had played 3 seasons up to the kick (stops unnecessary removal of kicks early or late in the dataset)
+                )
+                )'''
+    df = get_data(cnx, args.date, where=where, xp=args.xp, base=args.base)
 
-    # get priors (using results pre-2017)
-    exp_results = pd.read_csv('../results/expanded_results.csv', index_col=0).rename(
-        index={'cold:windy': 'cold*windy', 'postseason:away_game': 'postseason*away_game'})
+    # get priors (using results pre-2011)
+    exp_results = pd.read_csv(f'../results/{args.prior}.csv', index_col=0).rename(
+        index=lambda x: x.replace(':', '*'))
+
+    # get interactions and form features
+    df = feature_engineering(df, exp_results)
+
+    # get priors for features
     priors = get_priors(exp_results)
 
-    # formula = 'good ~ ' + '+'.join(df.drop('good', axis=1).columns.values)
-    # print(formula)
+    formula = 'good ~ ' + '+'.join(df.drop('good', axis=1).columns.values)
+    print(formula)
 
     # params
     print(f'Training examples: {len(df)}')
+
+    # print(df.info())
+    # print(priors)
+    # import sys
+    # sys.exit(1)
 
     # train
     train(df, priors)
