@@ -1,3 +1,7 @@
+import pandas as pd
+import numpy as np
+
+
 def fill_temp(group):
     window = 24
     while group['temperature'].isna().sum() > 0:
@@ -18,6 +22,11 @@ def fill_temp(group):
     return group
 
 
+def add_kicks(group):
+    group['kicks'] = pd.Series(list(range(len(group))), index=group.index)
+    return group
+
+
 def clean(data):
     data = data.replace('', np.nan)
     data['temperature'] = data['temperature'].astype(float)
@@ -27,9 +36,9 @@ def clean(data):
     data['temperature'] = data['temperature'].fillna(70).astype(int)  # some stadiums still dont have temps.
     data['form'] = data.groupby('fkicker')['good'].transform(
         lambda row: row.ewm(span=10).mean().shift(1))  # calculate form
-
-    data['kicks'] = pd.Series(kicks_to_date(data), index=data.index)
-    data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
+    data['kicks'] = 0
+    # data = data.groupby('fkicker').apply(add_kicks)
+    # data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
     return data
 
 
@@ -53,7 +62,7 @@ def kicks_to_date(data):
     fkicker_kicks_at_pid = []
     for index, row in data.iterrows():
         if row['fkicker'] not in kicks_per_kicker:
-            kicks_per_kicker['fkicker'] = 0
-        kicks_per_kicker['fkicker'] += 1
+            kicks_per_kicker[row['fkicker']] = 0
+        kicks_per_kicker[row['fkicker']] += 1
         fkicker_kicks_at_pid.append(kicks_per_kicker['fkicker'])
     return fkicker_kicks_at_pid
