@@ -27,6 +27,8 @@ def clean(data):
     data['temperature'] = data['temperature'].fillna(70).astype(int)  # some stadiums still dont have temps.
     data['form'] = data.groupby('fkicker')['good'].transform(
         lambda row: row.ewm(span=10).mean().shift(1))  # calculate form
+
+    data['kicks'] = pd.Series(kicks_to_date(data), index=data.index)
     data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
     return data
 
@@ -44,3 +46,14 @@ def get_data(conn, date_condition, where='', xp=False, base='base_query'):
     df = pd.read_sql(query, conn, index_col='pid')
 
     return df
+
+
+def kicks_to_date(data):
+    kicks_per_kicker = {}
+    fkicker_kicks_at_pid = []
+    for index, row in data.iterrows():
+        if row['fkicker'] not in kicks_per_kicker:
+            kicks_per_kicker['fkicker'] = 0
+        kicks_per_kicker['fkicker'] += 1
+        fkicker_kicks_at_pid.append(kicks_per_kicker['fkicker'])
+    return fkicker_kicks_at_pid
