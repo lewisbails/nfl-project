@@ -47,3 +47,6 @@ from FGXP fg
     join kicker k on k.player = fg.fkicker and g.gid=k.gid
     join PLAY pp on pp.pid=p.pid-1 and pp.gid=p.gid
     left join player ppp on k.player=ppp.player
+where ((fg.fkicker in (select fkicker
+    from fifty)) or (k.seas>=2 and k.seas-(g.seas-2000)>0))
+    and p.blk != 1 -- blocked kicks are completely unpredictable and should not be counted

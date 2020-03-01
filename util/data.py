@@ -47,14 +47,16 @@ def clean(data):
     return data
 
 
-def get_data(conn, date_condition, where='', xp=False, base='base_query'):
+def get_data(conn, date_condition, xp=False, base='base_query'):
     query = open(f'../sql/{base}.sql', 'r').read()
     if not xp:
-        query += '''\nwhere fg.fgxp='FG' -- not an xp'''
+        fg = '''\nand fg.fgxp='FG' -- not an xp'''
+    else:
+        fg = ''
 
-    query += f'''\n{where}\nand p.blk != 1 -- blocked kicks are completely unpredictable and should not be counted\
-    \nand g.seas {date_condition}\
+    query += f'''\nand {date_condition}\
     \nand k.seas >= 0 -- some have negative seasons for some reason\
+    \n{fg}\
     \norder by p.pid'''
 
     df = pd.read_sql(query, conn, index_col='pid')
