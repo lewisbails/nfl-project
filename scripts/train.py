@@ -3,21 +3,10 @@ import pandas as pd
 import mysql.connector
 import pickle
 from datetime import datetime as dt
-
-
-def get_data(conn, date_condition, where='', xp=False, base='base_query'):
-    query = open(f'../sql/{base}.sql', 'r').read()
-    if not xp:
-        query += '''\nwhere fg.fgxp='FG' -- not an xp'''
-
-    query += f'''\n{where}\nand p.blk != 1 -- blocked kicks are completely unpredictable and should not be counted\
-    \nand g.seas {date_condition}\
-    \nand k.seas >= 0 -- some have negative seasons for some reason\
-    \norder by p.pid'''
-
-    df = pd.read_sql(query, conn, index_col='pid')
-
-    return df
+import sys
+sys.path.append('..')
+from util.data import get_data, clean
+from util.feature import calc_interactions
 
 
 def get_priors(results):
@@ -32,18 +21,14 @@ def get_priors(results):
     return priors
 
 
+def feature_engineering(data, res):
+    inters = list(filter(lambda x: '*' in x), res)
+    data = calc_interactions(data, inters)
+    return data
+
+
 def train(data, priors, samples=1000, tune=1000):
     with pm.Model() as logistic_model:
-
-        # from_formula was working so i went with the standard GLM API
-        # it didnt like the whole passing a SharedVariable in the data slot
-        # if 'Intercept' not in data.columns:
-        #     data['Intercept'] = 1
-        # df_shared = pm.Data('data', data)
-        # pm.glm.GLM.from_formula(formula,
-        #                         df_shared,
-        #                         priors=priors,
-        #                         family='binomial')
 
         print('Data..', end='')
         df_x = data.drop('good', axis=1)
@@ -74,27 +59,6 @@ def train(data, priors, samples=1000, tune=1000):
             pickle.dump(trace, f)
 
         return logistic_model, trace
-
-
-def get_interactions(data, res):
-    for i in res.index:
-        if '*' in i:
-            l, r = i.split('*')
-            data[i] = data[l] * data[r]
-
-    return data
-
-
-def feature_engineering(data, res):
-
-    # get interaction features
-    data = get_interactions(data, res)
-
-    # get form feature
-    data['form'] = data.groupby('fkicker')['good'].transform(lambda row: row.ewm(span=5).mean().shift(1))
-    data = data.drop('fkicker', axis=1).dropna()
-
-    return data
 
 
 if __name__ == '__main__':
@@ -132,8 +96,9 @@ if __name__ == '__main__':
     exp_results = pd.read_csv(f'../results/{args.prior}.csv', index_col=0).rename(
         index=lambda x: x.replace(':', '*'))
 
-    # get interactions and form features
-    df = feature_engineering(df, exp_results)
+    # get interactions
+    df = clean(df)
+    df = feature_engineering(df, exp_results.index)
 
     # get priors for features
     priors = get_priors(exp_results)
