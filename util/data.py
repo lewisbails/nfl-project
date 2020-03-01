@@ -22,8 +22,14 @@ def fill_temp(group):
     return group
 
 
+akps = 45  # average kicks per season
+
+
 def add_kicks(group):
-    group['kicks'] = pd.Series(list(range(len(group))), index=group.index)
+    f_row = group.iloc[0, :]
+    start = max(0, akps * (f_row['seasons'] - (f_row['year'] - 2000)))
+    kicks = list(range(start, start + len(group)))
+    group['kicks'] = pd.Series(kicks, index=group.index)
     return group
 
 
@@ -36,9 +42,8 @@ def clean(data):
     data['temperature'] = data['temperature'].fillna(70).astype(int)  # some stadiums still dont have temps.
     data['form'] = data.groupby('fkicker')['good'].transform(
         lambda row: row.ewm(span=10).mean().shift(1))  # calculate form
-    data['kicks'] = 0
-    # data = data.groupby('fkicker').apply(add_kicks)
-    # data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
+    data = data.groupby('fkicker').apply(add_kicks)
+    data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
     return data
 
 

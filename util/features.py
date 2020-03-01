@@ -1,5 +1,6 @@
 import pandas as pd
 import itertools
+from sklearn.preprocessing import StandardScaler
 
 
 def LASSO(data, covarients=None, y='good', doubles=True, triples=True, drop_post=[], filter=True, n=20):
