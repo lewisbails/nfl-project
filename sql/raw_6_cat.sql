@@ -4,6 +4,7 @@ select
     g.temp as temperature,
     g.H as home_team,
     g.stad as stadium,
+    case when fg.fgxp='FG' then 1 else 0 end as FG,
     round(datediff(str_to_date(concat('10/','01/',k.year), '%m/%d/%Y'), str_to_date(case when k.player='JH-0500' then '07/30/1976' when k.player='TP-1200' then '10/26/1970' else ppp.dob end, '%m/%d/%Y'))/365,1) as age,
     case when g.stad like "%Mile High%" then 1 else 0 end as altitude,
     case when (g.humd<60) or (g.humd = '') or (g.humd is null) then 0 else 1 end as humid,
