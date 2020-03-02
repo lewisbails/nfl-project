@@ -1,2 +1,2 @@
-# NFL Study
+# NFL Study 🏈
 This project entails several observational studies regarding the NFL. Many of which revolve around field goals and the possible factors that influence them. Within the notebooks directory you can find observational studies of the effect altitude, icing, and pressure on the likelihood of conversion. There is also a full logisitic regression model for predicting the likelihood of conversion given a host of factors. However, the model's main purpose was inference, not prediction, and the predictive power of the model, admittedly, leaves much to be desired.
