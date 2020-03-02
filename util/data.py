@@ -3,6 +3,7 @@ import numpy as np
 
 
 def fill_temp(group):
+    group = group.sort_index()  # index is pid
     window = 24
     while group['temperature'].isna().sum() > 0:
         # print('Window of',window)
@@ -26,6 +27,7 @@ akps = 45  # average kicks per season
 
 
 def add_kicks(group):
+    group = group.sort_index()  # index is pid
     f_row = group.iloc[0, :]
     start = max(0, akps * (f_row['seasons'] - (f_row['year'] - 2000)))
     kicks = list(range(start, start + len(group)))
