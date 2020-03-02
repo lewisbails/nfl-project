@@ -33,17 +33,18 @@ def add_kicks(group):
     return group
 
 
-def clean(data):
+def clean(data, dropna=True):
     data = data.replace('', np.nan)
     data['temperature'] = data['temperature'].astype(float)
     data['wind'] = data['wind'].astype(int)
     data['age'] = data['age'].astype(int)
-    data = data.groupby('stadium').apply(fill_temp)
+    data = data.groupby('stadium').apply(fill_temp)  # exponentiated weighted fill
     data['temperature'] = data['temperature'].fillna(70).astype(int)  # some stadiums still dont have temps.
     data['form'] = data.groupby('fkicker')['good'].transform(
-        lambda row: row.ewm(span=10).mean().shift(1))  # calculate form
-    data = data.groupby('fkicker').apply(add_kicks)
-    data = data.drop(['home_team', 'stadium', 'fkicker'], axis=1).dropna()
+        lambda row: row.ewm(span=10).mean().shift(1))  # calculate form (exponentiated weighted)
+    data = data.groupby('fkicker').apply(add_kicks)  # total kicks to date
+    if dropna:
+        data = data.dropna()
     return data
 
 
