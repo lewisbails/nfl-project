@@ -3,23 +3,21 @@ import numpy as np
 
 
 def fill_temp(group):
-    group = group.sort_index()  # index is pid
-    window = 24
-    while group['temperature'].isna().sum() > 0:
-        # print('Window of',window)
-        if window >= 48 or window >= len(group):
-            # print(f'Filling for {group.name}')
-            # last recorded temp was 48 kicks ago, thats too long. just fill the rest with the mean
-            group['temperature'] = group['temperature'].fillna(group['temperature'].mean())
-            break
-        # print(group['temperature'].isna().sum(), 'are NA of', len(group), f'for {group.name}')
-        rolling = group['temperature'].rolling(window, min_periods=2).mean()
-        # dont replace values that arent NA
-        roll_fill = rolling.drop(index=group['temperature'].dropna().index).dropna()
-        group.loc[roll_fill.index, 'temperature'] = roll_fill
-        # print(group['temperature'].isna().sum(), 'are NA of ', len(group), f'for {group.name}\n')
-        window += 8
-
+    if group['stadium'].iloc[0] in ('Closed Roof', 'Dome'):
+        group['temperature'] = group['temperature'].fillna(70).astype(int)
+    else:
+        group = group.sort_index()  # index is pid
+        window = 24
+        while group['temperature'].isna().sum() > 0:
+            if window >= 48 or window >= len(group):
+                # last recorded temp was 48 kicks ago, thats too long. just fill the rest with the mean
+                group['temperature'] = group['temperature'].fillna(group['temperature'].mean())
+                break
+            rolling = group['temperature'].rolling(window, min_periods=2).mean()
+            # dont replace values that arent NA
+            roll_fill = rolling.drop(index=group['temperature'].dropna().index).dropna()
+            group.loc[roll_fill.index, 'temperature'] = roll_fill
+            window += 8
     return group
 
 
@@ -40,11 +38,12 @@ def clean(data, dropna=True):
     data['temperature'] = data['temperature'].astype(float)
     data['wind'] = data['wind'].astype(int)
     data['age'] = data['age'].astype(int)
-    data = data.groupby('stadium').apply(fill_temp)  # exponentiated weighted fill
+    data = data.groupby(['stadium', 'year']).apply(fill_temp).droplevel(
+        ['stadium', 'year'])  # exponentiated weighted fill
     data['temperature'] = data['temperature'].fillna(70).astype(int)  # some stadiums still dont have temps.
     data['form'] = data.groupby('fkicker')['good'].transform(
         lambda row: row.ewm(span=10).mean().shift(1))  # calculate form (exponentiated weighted)
-    data = data.groupby('fkicker').apply(add_kicks)  # total kicks to date
+    data = data.groupby('fkicker').apply(add_kicks).droplevel('fkicker')  # total kicks to date
     if dropna:
         data = data.dropna()
     return data
