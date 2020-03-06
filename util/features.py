@@ -3,30 +3,41 @@ import itertools
 from sklearn.preprocessing import StandardScaler
 
 
-def LASSO(data, covarients=None, y='good', doubles=True, triples=True, drop_post=[], filter=True, n=20):
+class LASSO:
     ''' Feature selection by bootstrapped penalised regression.
         Include paired or triple interactions.
     '''
 
-    print('Normalising..', end=' ')
-    normed = pd.DataFrame.from_records(StandardScaler().fit_transform(data),
-                                       columns=data.columns, index=data.index)
-    normed[y] = data[y]
-    if covarients is not None:
-        print('Calculating interactions..', end=' ')
-        inters = get_interactions(covarients, doubles=doubles, triples=triples)
-        normed = calc_interactions(normed, inters)
-    normed = normed.drop(drop_post, axis=1)
-    print('Fitting bootstraps..', end=' ')
-    summary = bootstrap(normed, n=n)
-    if filter:
-        print('Filtering..', end=' ')
-        summary = summary[((summary['25%'] < 0) & (summary['75%'] < 0)) |
-                          ((summary['25%'] > 0) & (summary['75%'] > 0))]
-    summary['abs_mean'] = summary['mean'].abs()
-    summary = summary.sort_values('abs_mean', ascending=False)
-    print('Finished!')
-    return summary
+    def __init__(self, data, y):
+        self.data = data
+        self.y = y
+
+    def normalise(self):
+        normed = pd.DataFrame.from_records(StandardScaler().fit_transform(self.data),
+                                           columns=self.data.columns, index=self.data.index)
+        normed[self.y] = self.data[self.y]
+        self.data = normed
+        return self
+
+    def get_interactions(self, cols, doubles=True, triples=False):
+        interactions = get_interactions(cols, doubles, triples)
+        self.data = calc_interactions(self.data, interactions)
+        return self
+
+    def get_polynomials(self, cols, exp=2):
+        for col in cols:
+            self.data[f'{col}^{exp}'] = self.data[col]**exp
+        return self
+
+    def fit(self, n=1, filter_=True):
+        summary = bootstrap(self.data, n=n)
+        if filter_:
+            summary = summary[((summary['25%'] < 0) & (summary['75%'] < 0)) |
+                              ((summary['25%'] > 0) & (summary['75%'] > 0))]
+            summary['abs_mean'] = summary['mean'].abs()
+        summary = summary.sort_values('abs_mean', ascending=False)
+        print('Finished!')
+        return summary
 
 
 def get_interactions(covariates, doubles=True, triples=False):
