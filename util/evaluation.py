@@ -18,17 +18,20 @@ def odds(coefficients: pd.Series, **kwargs):
         except:
             pass
     # interactions
-    for i, j in itertools.product(kwargs.keys(), kwargs.keys()):
-        if i > j:
+    for i, j in itertools.combinations(kwargs.keys(), 2):
+        try:
+            sum_ += coefficients[f'{i}:{j}'] * kwargs[i] * kwargs[j]
+        except:
             try:
-                sum_ += coefficients[f'{i}:{j}'] * kwargs[i] * kwargs[j]
+                sum_ += coefficients[f'{j}:{i}'] * kwargs[i] * kwargs[j]
             except:
-                try:
-                    sum_ += coefficients[f'{j}:{i}'] * kwargs[i] * kwargs[j]
-                except:
-                    pass
-
-    # print(sum_)
+                pass
+    # polynomials
+    for arg, val in kwargs.items():
+        try:
+            sum_ += coefficients[arg + ' ^ 2'] * val
+        except:
+            pass
 
     return np.exp(sum_)
 
@@ -37,28 +40,34 @@ def confusion(covs: list, coefficients: pd.Series):
     ''' Confusion matrix of odd ratios. Base odds NOT chose by user. '''
 
     assert len(covs) == 2, 'Can only plot 2D confusion matrix.'
-    cols = {}
-    ranges = []
-    bases = []
+    covs_ = {}
     for i, cov in enumerate(covs):
         if covs[i] == 'dist':
-            ranges.append(range(20, 65, 5))
-            bases.append(20)
+            covs_[i] = {'key': cov, 'range': range(20, 65, 5), 'base': 20}
         elif covs[i] == 'seasons':
-            ranges.append(range(1, 26, 3))
-            bases.append(1)
+            covs_[i] = {'key': cov, 'range': range(1, 26, 3), 'base': 1}
+        elif covs[i] == 'pressure':
+            covs_[i] = {'key': cov, 'range': range(0, 6, 1), 'base': 0}
+        elif covs[i] == 'form':
+            covs_[i] = {'key': cov, 'range': range(0, 1, 0.1), 'base': 0}
+        elif covs[i] == 'temperature':
+            covs_[i] = {'key': cov, 'range': range(30, 80, 5), 'base': 30}
+        elif covs[i] == 'wind':
+            covs_[i] = {'key': cov, 'range': range(0, 30, 5), 'base': 0}
         else:
-            ranges.append(range(2))
-            bases.append(0)
+            covs_[i] = {'key': cov, 'range': range(2), 'base': 0}
 
-    base_odds = odds(coefficients, **{covs[0]: bases[0], covs[1]: bases[1]})
-    for i in ranges[0]:  # build cols
+    l = covs_[0]['key']
+    r = covs_[1]['key']
+    cols = {}
+    base_odds = odds(coefficients, **{l: covs_[0]['base'], r: covs_[1]['base']})
+    for i in covs_[0]['range']:  # build cols
         rows = []
-        for j in ranges[1]:
-            rows.append(odds(coefficients, **{covs[0]: i, covs[1]: j}) / base_odds)
-        cols[covs[0] + str(i)] = pd.Series(rows, index=[covs[1] + str(k) for k in ranges[1]])
+        for j in covs_[1]['range']:
+            rows.append(odds(coefficients, **{l: i, r: j}) / base_odds)
+        cols[f'{l}_{i}'] = pd.Series(rows, index=[f'{r}_{k}' for k in covs_[1]['range']])
     df = pd.DataFrame.from_dict(cols, orient='columns')
     ax = sns.heatmap(df, annot=True)
-    ax.set_title(f' Odds Ratios: {covs[0]} vs {covs[1]}')
+    ax.set_title(f'Odds Ratios: {l} vs {r}')
     plt.show()
     return ax

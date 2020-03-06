@@ -3,17 +3,17 @@ import itertools
 from sklearn.preprocessing import StandardScaler
 
 
-class LASSO:
-    ''' Feature selection by bootstrapped penalised regression.
-        Include paired or triple interactions.
-    '''
+class Features:
+    ''' Feature engineer '''
 
     def __init__(self, data, y):
         self.data = data
         self.y = y
+        self.scaler = None
 
     def normalise(self):
-        normed = pd.DataFrame.from_records(StandardScaler().fit_transform(self.data),
+        self.scaler = StandardScaler()
+        normed = pd.DataFrame.from_records(self.scaler.fit_transform(self.data),
                                            columns=self.data.columns, index=self.data.index)
         normed[self.y] = self.data[self.y]
         self.data = normed
@@ -29,8 +29,17 @@ class LASSO:
             self.data[f'{col}^{exp}'] = self.data[col]**exp
         return self
 
+
+class LASSO:
+    ''' Feature selection by bootstrapped penalised regression.
+        Include paired or triple interactions.
+    '''
+
+    def __init__(self, data, y):
+        self.features = Features(data, y)
+
     def fit(self, n=1, filter_=True):
-        summary = bootstrap(self.data, n=n)
+        summary = self.bootstrap(self.features.data, n=n)
         if filter_:
             summary = summary[((summary['25%'] < 0) & (summary['75%'] < 0)) |
                               ((summary['25%'] > 0) & (summary['75%'] > 0))]
@@ -38,6 +47,18 @@ class LASSO:
         summary = summary.sort_values('abs_mean', ascending=False)
         print('Finished!')
         return summary
+
+    def bootstrap(self, data, y='good', n=20):
+        ''' Logisitic regression bootstrap for variable coefficients. '''
+        from sklearn.linear_model import LogisticRegression
+        coefs = {}
+        for i in range(n):  # bootstrap for CI on coefficients
+            boot = data.sample(frac=1, replace=True)
+            model = LogisticRegression(penalty='l1', max_iter=1000, solver='liblinear', fit_intercept=True)
+            model.fit(X=boot.drop(y, axis=1), y=boot[y])
+            coefs[i] = pd.Series(index=boot.drop(y, axis=1).columns.values, data=model.coef_[0])
+
+        return pd.DataFrame.from_dict(coefs, orient='index').describe().transpose()
 
 
 def get_interactions(covariates, doubles=True, triples=False):
@@ -64,16 +85,3 @@ def calc_interactions(data, interactions):
         else:
             data[interaction] = data[covs[0]] * data[covs[1]] * data[covs[2]]
     return data
-
-
-def bootstrap(data, y='good', n=20):
-    ''' Logisitic regression bootstrap for variable coefficients. '''
-    from sklearn.linear_model import LogisticRegression
-    coefs = {}
-    for i in range(n):  # bootstrap for CI on coefficients
-        boot = data.sample(frac=1, replace=True)
-        model = LogisticRegression(penalty='l1', max_iter=1000, solver='liblinear', fit_intercept=True)
-        model.fit(X=boot.drop(y, axis=1), y=boot[y])
-        coefs[i] = pd.Series(index=boot.drop(y, axis=1).columns.values, data=model.coef_[0])
-
-    return pd.DataFrame.from_dict(coefs, orient='index').describe().transpose()
