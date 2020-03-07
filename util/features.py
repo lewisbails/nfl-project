@@ -24,6 +24,9 @@ class Features:
         self.data = calc_interactions(self.data, interactions)
         return self
 
+    def interaction(self, interaction):
+        self.data = calc_interactions(self.data, [interaction])
+
     def get_polynomials(self, cols, exp=2):
         for col in cols:
             self.data[f'{col}^{exp}'] = self.data[col]**exp
