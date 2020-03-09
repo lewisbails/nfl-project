@@ -41,7 +41,7 @@ class QBBot:
             '//*[@id="player_info_wrap"]/div[2]/table/tbody/tr[4]/td[2]').text
         if pos.lower() != 'quarterback':
             print(f'{self.first_name} {self.last_name} not quarterback')
-            return np.nan
+            # return np.nan
 
         time.sleep(1)
         attr_map = X_MAP.get(attr)
@@ -91,13 +91,20 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--date')
+    parser.add_argument('--players', default=None)
     args = parser.parse_args()
 
     missing = pd.read_csv(f'../data/combine_qb_{args.date}.csv', index_col=0)
+    if args.players:
+        players = args.players.split(' ')
+    else:
+        players = missing.index
 
     bot = QBBot()
 
-    for i, x in missing.iterrows():
+    for i, x in missing.loc[players, :].iterrows():
+        if x['lname'] == 'Vick':
+            x['fname'] = 'Michael'
         success = bot.get_player(x['fname'], x['lname'])
         if success:
             for j, val in x.drop(index=['fname', 'lname']).iteritems():
