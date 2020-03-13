@@ -1,4 +1,4 @@
-from scipy.spatial.distance import mahalanobis, euclidean
+from scipy.spatial.distance import pdist, squareform
 import networkx as nx
 from networkx.algorithms.matching import max_weight_matching as mwm
 import numpy as np
@@ -30,14 +30,34 @@ def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union
 
     treatment = data.loc[data[t], :].index  # treatment players
     control = data.loc[~data[t], :].index  # control players
+    if len(treatment) > len(control):
+        print('More treatment samples than control. ', end='')
     # dont include distances between like-group members
-    distances = get_distances(data.drop(t, axis=1), distance).loc[control, treatment.values]
-
+    distances = pdist(data.drop(t, axis=1).astype(float), distance)
+    distances = pd.DataFrame._from_arrays(squareform(distances), index=data.index, columns=data.index.values)
+    distances = distances.loc[control, treatment.values]
     if method == 'approximate':
         matches = approximate_matches(distances, caliper)
-    if method == 'graphical':
+    elif method == 'graphical':
         matches = graphical_matches(distances, caliper)
+    elif method == 'with_replacement':
+        matches = match_with_replacement(distances, caliper, len(control) > len(treatment))
+    else:
+        raise NotImplementedError('Matching method not found.')
+    print('Matches found.')
 
+    return matches
+
+
+def match_with_replacement(distance_matrix, threshold, more_control):
+    matches = {}
+    if more_control:
+        other = 'treatment'
+    else:
+        other = 'control'
+    for c_idx, row in distance_matrix.iterrows():
+        if row.min() < threshold:
+            matches[c_idx] = {other: row.idxmin(), 'dist': row.min()}
     return matches
 
 
@@ -59,10 +79,10 @@ def approximate_matches(distance_matrix, threshold):
                 if t_idx not in matches:
                     # add match
                     print(f'Match {c_idx} -> {t_idx} ({round(dist,1)})')
-                    matches[t_idx] = {'c': c_idx, 'dist': dist}
+                    matches[t_idx] = {'match': c_idx, 'dist': dist}
                 else:
                     # already matched, step forward instead
-                    control_exists = matches[t_idx]['c']
+                    control_exists = matches[t_idx]['match']
                     print(
                         f'{c_idx} -> {t_idx} ({round(dist,1)}) already taken by {control_exists} -> {t_idx}, {len(remaining[1:])} options remaining.')
                     new_distances[c_idx] = remaining[1:]
@@ -73,21 +93,6 @@ def approximate_matches(distance_matrix, threshold):
         distances = new_distances
         step += 1
     return matches
-
-
-def get_distances(u: pd.DataFrame, method: str):
-    distances = {}
-    if method == 'mahalanobis':
-        inv_cov = np.linalg.inv(u.cov())
-        for i, row_i in u.iterrows():
-            distances_i = [mahalanobis(row_i, row_j, inv_cov) for _, row_j in u.iterrows()]
-            distances[i] = pd.Series(distances_i, index=u.index)
-    elif method == 'euclidean':
-        for i, row_i in u.iterrows():
-            distances_i = [euclidean(row_i, row_j) for _, row_j in u.iterrows()]
-            distances[i] = pd.Series(distances_i, index=u.index)
-    distance_matrix = pd.DataFrame.from_dict(distances, orient='index')
-    return distance_matrix
 
 
 def get_graph(u: pd.DataFrame, c):
@@ -103,4 +108,4 @@ def graphical_matches(data: pd.DataFrame, threshold):
     graph = get_graph(data, threshold)
     matches = mwm(graph, maxcardinality=True)
     # NOTE: key is not guaranteed to be the treatment example in the match
-    return {k: {'c': v, 'dist': -graph.get_edge_data(k, v)['weight']} for k, v in matches}
+    return {k: {'match': v, 'dist': -graph.get_edge_data(k, v)['weight']} for k, v in matches}
