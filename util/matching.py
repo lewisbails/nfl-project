@@ -44,7 +44,6 @@ def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union
         matches = match_with_replacement(distances, caliper, len(control) > len(treatment))
     else:
         raise NotImplementedError('Matching method not found.')
-    print('Matches found.')
 
     return matches
 
@@ -52,12 +51,13 @@ def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union
 def match_with_replacement(distance_matrix, threshold, more_control):
     matches = {}
     if more_control:
-        other = 'treatment'
+        iterator = distance_matrix.iterrows()  # iterate over control
     else:
-        other = 'control'
-    for c_idx, row in distance_matrix.iterrows():
+        iterator = distance_matrix.items()  # iterate over treatment
+
+    for l_idx, row in iterator:
         if row.min() < threshold:
-            matches[c_idx] = {other: row.idxmin(), 'dist': row.min()}
+            matches[l_idx] = {'match': row.idxmin(), 'dist': row.min()}
     return matches
 
 
