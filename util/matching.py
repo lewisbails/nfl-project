@@ -4,6 +4,8 @@ from networkx.algorithms.matching import max_weight_matching as mwm
 import numpy as np
 import pandas as pd
 from typing import Union
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union[int, float] = 5):
@@ -19,19 +21,17 @@ def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union
         Distance measure between examples.
     method: str
         Matching method for pairing control examples to treatment variables.
-    caliper: int, float
-        Maximum distance between examples of a proposed match.
+    caliper: int, float, str
+        Maximum distance between examples of a proposed match. If auto use mean distance + 0.2 std of distances.
 
     Returns
     -------
-    matches : dict
+    matches : dict, DataFrame
 
     '''
 
     treatment = data.loc[data[t], :].index  # treatment players
     control = data.loc[~data[t], :].index  # control players
-    if len(treatment) > len(control):
-        print('More treatment samples than control. ', end='')
     # dont include distances between like-group members
     distances = pdist(data.drop(t, axis=1).astype(float), distance)
     distances = pd.DataFrame._from_arrays(squareform(distances), index=data.index, columns=data.index.values)
@@ -41,24 +41,28 @@ def match(data: pd.DataFrame, t: str, distance: str, method: str, caliper: Union
     elif method == 'graphical':
         matches = graphical_matches(distances, caliper)
     elif method == 'with_replacement':
-        matches = match_with_replacement(distances, caliper, len(control) > len(treatment))
+        if caliper == 'auto':
+            caliper = distances.std().mean()
+            print(f'Using caliper {caliper}')
+        matches = distances.le(caliper)
     else:
         raise NotImplementedError('Matching method not found.')
 
     return matches
 
 
-def match_with_replacement(distance_matrix, threshold, more_control):
-    matches = {}
-    if more_control:
-        iterator = distance_matrix.iterrows()  # iterate over control
-    else:
-        iterator = distance_matrix.items()  # iterate over treatment
+# def match_with_replacement(distance_matrix, threshold):
 
-    for l_idx, row in iterator:
-        if row.min() < threshold:
-            matches[l_idx] = {'match': row.idxmin(), 'dist': row.min()}
-    return matches
+#     matches = {}
+#     if more_control:
+#         iterator = distance_matrix.items()  # iterate over treatment
+#     else:
+#         iterator = distance_matrix.iterrows()  # iterate over control
+
+#     for l_idx, row in iterator:
+#         if row.min() < threshold:
+#             matches[l_idx] = {'match': row.idxmin(), 'dist': row.min()}
+#     return matches
 
 
 def approximate_matches(distance_matrix, threshold):
@@ -109,3 +113,31 @@ def graphical_matches(data: pd.DataFrame, threshold):
     matches = mwm(graph, maxcardinality=True)
     # NOTE: key is not guaranteed to be the treatment example in the match
     return {k: {'match': v, 'dist': -graph.get_edge_data(k, v)['weight']} for k, v in matches}
+
+
+def covariate_dists(data, on, **kwargs):
+    vals = data[on].unique()
+    for col in data.drop(on, axis=1).columns:
+        try:
+            for val in vals:
+                sns.distplot(data[data[on] == val][col], label=f'{on}={val}', hist=False)
+        except:
+            for val in vals:
+                sns.distplot(data[data[on] == val][col], label=f'{on}={val}', hist=True, kde=False)
+        plt.title(f'{col} distributions')
+        plt.legend()
+        plt.show()
+
+
+def ks_test(data, on, **kwargs):
+    from scipy.stats import ks_2samp
+    v = data[on].unique()
+    if len(v) != 2:
+        print('Dichotamize variable of interest and try again.')
+        return None
+
+    ks = []
+    for col in data.drop(on, axis=1).columns:
+        ks.append(ks_2samp(data[data[on] == v[0]][col], data[data[on] == v[1]][col]))
+
+    return pd.DataFrame.from_records(ks, index=data.drop(on, axis=1).columns, columns=['statistic', 'p-value'])
