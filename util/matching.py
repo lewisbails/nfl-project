@@ -8,73 +8,166 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-def filter_indices(distances, method: str, caliper: Union[int, float] = 5):
-    if method == 'with_replacement':
-        if caliper == 'auto':
-            caliper = distances.std().mean()
-            print(f'Using caliper {caliper}')
-        matches = distances.le(caliper)
+def mahalanobis_frontier(data, on, dv):
+    distances = get_distances(data.drop(dv, axis=1), 'mahalanobis', on)
+    MMD_tc = distances.min(axis=0)  # gives closest control to each treatment
+    MMD_ct = distances.min(axis=1)  # gives closest treatment to each control
+    MMD = pd.concat([MMD_tc, MMD_ct])
+
+    pruned_controls = []
+    pruned_treatments = []
+    AMD_ = []
+    radii = []
+    unique_distances = sorted(set(np.ravel(distances.round(1).to_numpy())), reverse=True)
+    print(f'{len(unique_distances)} distances to check.')
+    for i, radius in enumerate(unique_distances):
+        if not i % 10:
+            print(f'Checked {(i+1)}/{len(unique_distances)} distances')
+        AMD = MMD[MMD <= radius].mean()  # average min distance below threshold
+        AMD_.append(AMD)
+        treatments, controls = prune_by_distance(distances, radius)  # controls that werent pruned
+        pruned_controls.append(len(distances) - len(controls))
+        pruned_treatments.append(len(distances.columns) - len(treatments))
+        radii.append(radius)
+
+        # stopping criterion
+        if pruned_controls[-1] == len(distances) or AMD_[-1] == 0:
+            break
+
+    return pd.DataFrame.from_dict({'pruned controls': pruned_controls, 'pruned treatments': pruned_treatments, 'AMD': AMD_, 'radius': radii}, orient='columns')
+
+
+def L_frontier(data, on, dv):
+    data = data.drop(dv, axis=1)
+    controls = len(data[~data[on]])
+    treatments = len(data[data[on]])
+
+    # find number of bins to use
+    n_L1 = L1(data, on)
+    H = n_L1[n_L1 == n_L1.median()].index[0]
+
+    remaining = data.copy()
+    pruned_controls = []
+    L1s = []
+    while len(remaining):
+        # assess
+        L1s.append(L1(remaining, on, n_bins=[H]).median())
+        pruned_controls.append(len(controls) - len(remaining[~remaining[on]]))
+        pruned_treatments.append(len(treatments) - len(remaining[~remaining[on]]))
+
+        # stopping criterion
+        if pruned_controls[-1] == controls or pruned_treatments == treatments or L1s[-1] == 0:
+            break
+
+        # prune
+        remaining = prune_by_hist(remaining, on)
+
+    return pd.DataFrame.from_records([pruned_controls, pruned_treatments, L1s], columns=['pruned controls', 'pruned treatments', 'L1'])
+
+
+def prune_by_hist(data, on):
+    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
+    ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
+    t_histd, edges = np.histogramdd(treatment, H, range=ranges, density=True)
+    c_histd, _ = np.histogramdd(control, H, range=ranges, density=True)
+    t_hist = np.array(np.histogramdd(treatment, H, range=ranges, density=False)[0], dtype=bool)
+    c_hist = np.array(np.histogramdd(control, H, range=ranges, density=False)[0], dtype=bool)
+    d_hist = (t_histd - c_histd) * t_hist * c_dist  # dont consider bins of only T or C
+    idx_absmax = np.unravel_index(np.argmax(abs(d_hist), axis=None), d_hist.shape)
+    left_edge = edges[idx_absmax]
+    right_edge = edges[(i + 1 for i in idx_absmax)]
+    if d_hist[idx_absmax] > 0:
+        treatment = drop_one_in_bin(treatment, left_edge, right_edge)
     else:
-        raise NotImplementedError('Matching method not found.')
-    # remove rows or columns that are all False
+        control = drop_one_in_bin(control, left_edge, right_edge)
+    data = data.loc[treatment.index + control.index, :]
+    return data
+
+
+def drop_one_in_bin(data, left_edge, right_edge):
+    mask = [all(fi >= left_edge) and all(fi < right_edge) for fi in data.to_array()]
+    to_drop = data.loc[mask, :].sample(1).index[0]
+    data = data.drop(index=to_drop)
+    return data
+
+
+def prune_by_distance(distances, caliper: Union[int, float] = 5):
+    matches = distances.le(caliper)
     # controls that have a treatment match
     control_idx = [idx for idx in matches.index if matches.loc[idx, :].sum()]
     # treatments that have a control match
     treatment_idx = [idx for idx in matches.columns if matches[idx].sum()]
-    return control_idx + treatment_idx
+    return treatment_idx, control_idx
 
 
 def get_distances(data, distance, t):
-    treatment = data.loc[data[t], :].index  # treatment players
-    control = data.loc[~data[t], :].index  # control players
+    treatment, control = list(map(lambda x: x.index, split(data, t)))
     distances = pdist(data.drop(t, axis=1).astype(float), distance)
     distances = pd.DataFrame._from_arrays(squareform(distances), index=data.index, columns=data.index.values)
     distances = distances.loc[control, treatment.values]
+    distances.index.rename('control', inplace=True)
+    distances.columns.rename('treatment', inplace=True)
     return distances
 
 
-def match(data, on, dv, distance, method, caliper):
+def match_by_distance(data, on, dv, distance, caliper):
+
+    if caliper == 'auto':
+        df = mahalanobis_frontier(data, on, dv)
+        df['AMD'] = (df['AMD'] - df['AMD'].min()) / (df['AMD'].max() - df['AMD'].min())
+        df['pruned controls'] = (df['pruned controls'] - df['pruned controls'].min()) / \
+            (df['pruned controls'].max() - df['pruned controls'].min())
+        df['dto'] = np.sqrt(df['AMD']**2 + df['pruned controls']**2)
+        caliper = df.loc[df['dto'] == df['dto'].min(), 'radius']
+
     distances = get_distances(data.drop(dv, axis=1), distance, on)
-    df_matched = data.loc[filter_indices(distances, method, caliper), :]
+    treatments, controls = prune_by_distance(distances, caliper)
+    df_matched = data.loc[controls + treatments, :]
     return df_matched
 
 
-def search_radii(data, on, dv, distance, method, radii, cont_test):
-    radii_res = []
-    for radius in radii:
-        distances = get_distances(data.drop(dv, axis=1), distance, on)
-        df_matched = data.loc[filter_indices(distances, method, radius), :]
-        if len(df_matched):
-            # Imbalance measure 1: mean min mahalanobis distance
-            min_dist = distances.min()
-            mean_min = min_dist[min_dist < radius].mean()
-            # Imbalance measure 2: histogram bin frequence
-            # TODO: implement
-            # Imbalance measure 3: difference of means?
-            # TODO: implement
-            # Imbalance measure 4: Dist of propensity scores?
-            # TODO: implement
-# BROKEN
+def match_by_L1(data, on, dv, l1):
+    pass
 
-            # mw = dist_test(df_matched.drop(dv, axis=1), on=on, func=cont_test)
-            # bt = binom_z_tests(df_matched.drop(dv, axis=1), on=on)
-            # res = mw['statistic'].combine_first(bt['statistic'])
-            # res.index.rename('covariate', inplace=True)
-            # res = res.reset_index()
-            # res['treatments'] = df_matched[on].sum()
-            # res['samples'] = len(df_matched)
-            # res['radius'] = radius
-        else:
-            res = pd.DataFrame({'statistic': [np.nan] * (len(df_matched.columns) - 2),
-                                'covariate': df_matched.drop([dv, on], axis=1).columns})
-            res['treatments'] = 0
-            res['samples'] = 0
-            res['radius'] = radius
-        radii_res.append(res)
 
-    cov_dists = pd.concat(radii_res)
-    cov_dists
-    return cov_dists
+def Ln(data, on, func, **kwargs):
+    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
+    n_bins = np.arange(5, 20) if n_bins not in kwargs else kwargs['n_bins']
+    ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
+    L1_s = []
+    for bins in n_bins:
+        t_hist, _ = np.histogramdd(treatment, bins, range=ranges, density=True)
+        c_hist, _ = np.histogramdd(control, bins, range=ranges, density=True)
+        L1_s.append(func(t_hist, c_hist))
+    res = pd.Series(L1_s, index=n_bins, name='distance')
+    res.index.rename('bin width', inplace=True)
+    return res
+
+
+def L1(data, on, **kwargs):
+    return Ln(data, on, lambda x, y: np.sum(np.abs(x - y)) / 2, **kwargs)
+
+
+def L2(data, on, **kwargs):
+    return Ln(data, on, lambda x, y: np.sqrt(np.sum((x - y)**2) / 2), **kwargs)
+
+
+def dom(data, on, func):
+    norm = (data - data.mean()) / data.std()
+    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(norm, on)))
+    return func(treatment.mean() - control.mean())
+
+
+def dom_2(data, on):
+    return dom(data, on, lambda x: np.sqrt(np.sum(x**2) / len(x)))
+
+
+def dom_1(data, on):
+    return dom(data, on, lambda x: np.sum(x.abs()) / len(x))
+
+
+def split(data, on):
+    return data.loc[data[on], :], data.loc[~data[on], :],
 
 
 def covariate_dists(data, on, **kwargs):
@@ -149,7 +242,7 @@ def binom_z_tests(data, on):
 
 # def approximate_matches(distance_matrix, threshold):
 #     # sort the treatment neightbours of each control example
-#     distances = {c_idx: list(filter(lambda x: x[-1] <= threshold, sorted(
+#     distances = {c_idx: list(prune(lambda x: x[-1] <= threshold, sorted(
 #         zip(row.index, row), key=lambda x: x[-1]))) for c_idx, row in distance_matrix.iterrows()}
 #     # take a step forward for each control, noting the treatment examples removed from the available pool every time
 #     # this isnt optimal but it might be an okay approximation
