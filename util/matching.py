@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-def mahalanobis_frontier(data, on, dv):
-    distances = get_distances(data.drop(dv, axis=1), 'mahalanobis', on)
+def mahalanobis_frontier(data, on):
+    distances = get_distances(data, 'mahalanobis', on)
     MMD_tc = distances.min(axis=0)  # gives closest control to each treatment
     MMD_ct = distances.min(axis=1)  # gives closest treatment to each control
     MMD = pd.concat([MMD_tc, MMD_ct])
@@ -37,35 +37,36 @@ def mahalanobis_frontier(data, on, dv):
     return pd.DataFrame.from_dict({'pruned controls': pruned_controls, 'pruned treatments': pruned_treatments, 'AMD': AMD_, 'radius': radii}, orient='columns')
 
 
-def L_frontier(data, on, dv):
-    data = data.drop(dv, axis=1)
+def L_frontier(data, on):
     controls = len(data[~data[on]])
     treatments = len(data[data[on]])
 
     # find number of bins to use
     n_L1 = L1(data, on)
     H = n_L1[n_L1 == n_L1.median()].index[0]
+    # H = 3
 
     remaining = data.copy()
     pruned_controls = []
+    pruned_treatments = []
     L1s = []
     while len(remaining):
         # assess
         L1s.append(L1(remaining, on, n_bins=[H]).median())
-        pruned_controls.append(len(controls) - len(remaining[~remaining[on]]))
-        pruned_treatments.append(len(treatments) - len(remaining[~remaining[on]]))
+        pruned_controls.append(controls - len(remaining[~remaining[on]]))
+        pruned_treatments.append(treatments - len(remaining[~remaining[on]]))
 
         # stopping criterion
         if pruned_controls[-1] == controls or pruned_treatments == treatments or L1s[-1] == 0:
             break
 
         # prune
-        remaining = prune_by_hist(remaining, on)
+        remaining = prune_by_hist(remaining, on, H)
 
     return pd.DataFrame.from_records([pruned_controls, pruned_treatments, L1s], columns=['pruned controls', 'pruned treatments', 'L1'])
 
 
-def prune_by_hist(data, on):
+def prune_by_hist(data, on, H):
     treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
     ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
     t_histd, edges = np.histogramdd(treatment, H, range=ranges, density=True)
@@ -111,9 +112,8 @@ def get_distances(data, distance, t):
 
 
 def match_by_distance(data, on, dv, distance, caliper):
-
     if caliper == 'auto':
-        df = mahalanobis_frontier(data, on, dv)
+        df = mahalanobis_frontier(data.drop(dv, axis=1), on)
         df['AMD'] = (df['AMD'] - df['AMD'].min()) / (df['AMD'].max() - df['AMD'].min())
         df['pruned controls'] = (df['pruned controls'] - df['pruned controls'].min()) / \
             (df['pruned controls'].max() - df['pruned controls'].min())
@@ -132,14 +132,19 @@ def match_by_L1(data, on, dv, l1):
 
 def Ln(data, on, func, **kwargs):
     treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
-    n_bins = np.arange(5, 20) if n_bins not in kwargs else kwargs['n_bins']
+    n_bins = np.arange(2, 20) if 'n_bins' not in kwargs else kwargs['n_bins']
     ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
     L1_s = []
+    bins_used = []
     for bins in n_bins:
-        t_hist, _ = np.histogramdd(treatment, bins, range=ranges, density=True)
-        c_hist, _ = np.histogramdd(control, bins, range=ranges, density=True)
-        L1_s.append(func(t_hist, c_hist))
-    res = pd.Series(L1_s, index=n_bins, name='distance')
+        try:
+            t = np.histogramdd(treatment.to_numpy(), bins, range=ranges, density=True)
+            c = np.histogramdd(control.to_numpy(), bins, range=ranges, density=True)
+            L1_s.append(func(t[0], c[0]))
+            bins_used.append(bins)
+        except:
+            pass
+    res = pd.Series(L1_s, index=bins_used, name='distance')
     res.index.rename('bin width', inplace=True)
     return res
 
@@ -170,23 +175,29 @@ def split(data, on):
     return data.loc[data[on], :], data.loc[~data[on], :],
 
 
-def covariate_dists(data, on, **kwargs):
+def covariate_dists(data, on, kde=True, hist=True, n_bins=10):
     vals = data[on].unique()
+    flatui = ["#2ecc71", "#9b59b6", "#3498db", "#e74c3c", "#34495e"]
+
     for col in data.drop(on, axis=1).columns:
+        bins = np.linspace(data[col].min(), data[col].max(), n_bins) if hist else None
         try:
-            for val in vals:
-                sns.distplot(data[data[on] == val][col], label=f'{on}={val}', hist=False)
-        except:
-            for val in vals:
+            for i, val in enumerate(vals):
                 sns.distplot(data[data[on] == val][col],
-                             label=f'{on}={val}', hist=True, kde=False, norm_hist=True)
+                             bins=bins, label=f'{on}={val}', kde=kde, norm_hist=hist, hist=hist, color=flatui[i])
+                plt.axvline(data[data[on] == val][col].mean(), color=flatui[i])
+        except:
+            for i, val in enumerate(vals):
+                sns.distplot(data[data[on] == val][col],
+                             bins=bins, label=f'{on}={val}', kde=False, norm_hist=True, hist=True, color=flatui[i])
+                plt.axvline(data[data[on] == val][col].mean(), color=flatui[i])
+
         plt.title(f'{col} distributions')
         plt.legend()
         plt.show()
 
 
 def dist_test(data, on, func, **kwargs):
-
     v = data[on].unique()
     if len(v) != 2:
         print('Dichotamize variable of interest and try again.')

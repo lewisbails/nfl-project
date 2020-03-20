@@ -44,6 +44,7 @@ def clean(data, dropna=True):
     data['form'] = data.groupby('fkicker')['good'].transform(
         lambda row: row.ewm(span=10).mean().shift(1))  # calculate form (exponentiated weighted)
     data = data.groupby('fkicker').apply(add_kicks).droplevel('fkicker')  # total kicks to date
+    data['form'] = data['form'].fillna(method='bfill')
     if dropna:
         data = data.dropna()
     return data
