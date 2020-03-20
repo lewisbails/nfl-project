@@ -1,6 +1,6 @@
 from scipy.spatial.distance import pdist, squareform
-import networkx as nx
-from networkx.algorithms.matching import max_weight_matching as mwm
+# import networkx as nx
+# from networkx.algorithms.matching import max_weight_matching as mwm
 import numpy as np
 import pandas as pd
 from typing import Union
@@ -9,10 +9,12 @@ import seaborn as sns
 
 
 def mahalanobis_frontier(data, on):
+    print('Distances..', end=' ')
     distances = get_distances(data, 'mahalanobis', on)
     MMD_tc = distances.min(axis=0)  # gives closest control to each treatment
     MMD_ct = distances.min(axis=1)  # gives closest treatment to each control
     MMD = pd.concat([MMD_tc, MMD_ct])
+    print('ready.')
 
     pruned_controls = []
     pruned_treatments = []
