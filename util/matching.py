@@ -6,6 +6,7 @@ import pandas as pd
 from typing import Union
 import matplotlib.pyplot as plt
 import seaborn as sns
+import tqdm
 
 
 def mahalanobis_frontier(data, on):
@@ -21,10 +22,7 @@ def mahalanobis_frontier(data, on):
     AMD_ = []
     radii = []
     unique_distances = sorted(set(np.ravel(distances.round(1).to_numpy())), reverse=True)
-    print(f'{len(unique_distances)} distances to check.')
-    for i, radius in enumerate(unique_distances):
-        if not i % 10:
-            print(f'Checked {(i+1)}/{len(unique_distances)} distances')
+    for radius in tqdm(unique_distances):
         AMD = MMD[MMD <= radius].mean()  # average min distance below threshold
         AMD_.append(AMD)
         treatments, controls = prune_by_distance(distances, radius)  # controls that werent pruned
@@ -43,42 +41,45 @@ def L_frontier(data, on):
     controls = len(data[~data[on]])
     treatments = len(data[data[on]])
 
-    # find number of bins to use
-    n_L1 = L1(data, on)
-    H = n_L1[n_L1 == n_L1.median()].index[0]
-    # H = 3
+    ranges = get_ranges(data.drop(on, axis=1))
+    bins = get_bins(data.drop(on, axis=1))
+    print(ranges)
+    print(bins)
 
     remaining = data.copy()
     pruned_controls = []
     pruned_treatments = []
-    L1s = []
+    results = []
     while len(remaining):
         # assess
-        L1s.append(L1(remaining, on, n_bins=[H]).median())
+        result = L1(remaining, on, range=ranges, bins=bins, density=True)
+        print(f'L1: {round(result,1)}')
+        results.append(result)
+
         pruned_controls.append(controls - len(remaining[~remaining[on]]))
         pruned_treatments.append(treatments - len(remaining[~remaining[on]]))
 
         # stopping criterion
-        if pruned_controls[-1] == controls or pruned_treatments == treatments or L1s[-1] == 0:
+        if pruned_controls[-1] == controls or pruned_treatments == treatments or results[-1] == 0:
             break
 
         # prune
-        remaining = prune_by_hist(remaining, on, H)
+        remaining = prune_by_hist(remaining, on, ranges, bins)
 
-    return pd.DataFrame.from_records([pruned_controls, pruned_treatments, L1s], columns=['pruned controls', 'pruned treatments', 'L1'])
+    return pd.DataFrame.from_records([pruned_controls, pruned_treatments, results], columns=['pruned controls', 'pruned treatments', 'L1'])
 
 
-def prune_by_hist(data, on, H):
-    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
-    ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
-    t_histd, edges = np.histogramdd(treatment, H, range=ranges, density=True)
-    c_histd, _ = np.histogramdd(control, H, range=ranges, density=True)
-    t_hist = np.array(np.histogramdd(treatment, H, range=ranges, density=False)[0], dtype=bool)
-    c_hist = np.array(np.histogramdd(control, H, range=ranges, density=False)[0], dtype=bool)
+def prune_by_hist(data, on, ranges, bins):
+    (t_histd, edges), (c_histd, _) = get_hists(data, on, range=ranges, bins=bins, density=True)
+    (t_hist, _), (c_hist, _) = get_hists(data, on, range=ranges, bins=bins, density=False)
+    t_hist = np.array(t_hist, dtype=bool)
+    c_hist = np.array(c_hist, dtype=bool)
     d_hist = (t_histd - c_histd) * t_hist * c_dist  # dont consider bins of only T or C
     idx_absmax = np.unravel_index(np.argmax(abs(d_hist), axis=None), d_hist.shape)
     left_edge = edges[idx_absmax]
     right_edge = edges[(i + 1 for i in idx_absmax)]
+
+    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
     if d_hist[idx_absmax] > 0:
         treatment = drop_one_in_bin(treatment, left_edge, right_edge)
     else:
@@ -132,22 +133,30 @@ def match_by_L1(data, on, dv, l1):
     pass
 
 
-def Ln(data, on, func, **kwargs):
+def get_ranges(data):
+    ranges = [(data[c].min(), data[c].max()) for c in data.columns]
+    return ranges
+
+
+def get_bins(data):
+    bins = [len(data[c].unique()) for c in data.columns]
+    return bins
+
+
+def get_hists(data, on, **kwargs):
+    if "range" not in kwargs:
+        kwargs['range'] = get_ranges(data.drop(on, axis=1))
+    if "bins" not in kwargs:
+        kwargs['bins'] = get_bins(data.drop(on, axis=1))
     treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
-    n_bins = np.arange(2, 20) if 'n_bins' not in kwargs else kwargs['n_bins']
-    ranges = [(data[col].min(), data[col].max()) for col in treatment.columns]
-    L1_s = []
-    bins_used = []
-    for bins in n_bins:
-        try:
-            t = np.histogramdd(treatment.to_numpy(), bins, range=ranges, density=True)
-            c = np.histogramdd(control.to_numpy(), bins, range=ranges, density=True)
-            L1_s.append(func(t[0], c[0]))
-            bins_used.append(bins)
-        except:
-            pass
-    res = pd.Series(L1_s, index=bins_used, name='distance')
-    res.index.rename('bin width', inplace=True)
+    t = np.histogramdd(treatment.to_numpy(), **kwargs)
+    c = np.histogramdd(control.to_numpy(), **kwargs)
+    return t, c
+
+
+def Ln(data, on, func, **kwargs):
+    t, c = get_hists(data, on, **kwargs)
+    res = func(t[0], c[0])
     return res
 
 
