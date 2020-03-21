@@ -74,7 +74,7 @@ def prune_by_hist(data, on, ranges, bins):
     (t_hist, _), (c_hist, _) = get_hists(data, on, range=ranges, bins=bins, density=False)
     t_hist = np.array(t_hist, dtype=bool)
     c_hist = np.array(c_hist, dtype=bool)
-    d_hist = (t_histd - c_histd) * t_hist * c_dist  # dont consider bins of only T or C
+    d_hist = (t_histd - c_histd) * t_hist * c_hist  # dont consider bins of only T or C
     idx_absmax = np.unravel_index(np.argmax(abs(d_hist), axis=None), d_hist.shape)
     left_edge = edges[idx_absmax]
     right_edge = edges[(i + 1 for i in idx_absmax)]
@@ -104,9 +104,9 @@ def prune_by_distance(distances, caliper: Union[int, float] = 5):
     return treatment_idx, control_idx
 
 
-def get_distances(data, distance, t):
+def get_distances(data, distance, t, dtype=float):
     treatment, control = list(map(lambda x: x.index, split(data, t)))
-    distances = pdist(data.drop(t, axis=1).astype(float), distance)
+    distances = pdist(data.drop(t, axis=1).astype(dtype), distance)
     distances = pd.DataFrame._from_arrays(squareform(distances), index=data.index, columns=data.index.values)
     distances = distances.loc[control, treatment.values]
     distances.index.rename('control', inplace=True)
