@@ -6,7 +6,113 @@ import pandas as pd
 from typing import Union
 import matplotlib.pyplot as plt
 import seaborn as sns
-import tqdm
+from tqdm import tqdm
+import statsmodels.formula.api as smf
+import statsmodels.api as sm
+
+
+class CEM:
+    ''' Coarsened Exact Matching '''
+
+    def __init__(self, data, treatment, outcome):
+        self.data = data
+        self.outcome = outcome
+        self.treatment = treatment
+        self.matched = None
+
+    def match(self, bins):
+        ''' Return matched data given a coursening '''
+        # coarsen based on supplied bins
+        coarsened = self.coarsen(self.data, bins)
+        # filter groups with only control or treatment examples
+        gb = list(self.data.drop([self.outcome, self.treatment], axis=1).columns.values)
+        self.matched = coarsened.groupby(gb).filter(lambda x: len(x[self.treatment].unique()) > 1)
+        # weight samples
+        if len(self.matched):
+            vc = self.matched[self.treatment].value_counts()
+            mT, mC = vc[1], vc[0]
+            weights = self.matched.groupby(gb).apply(lambda x: self.weight(x, mT, mC))['weight']
+            self.matched = self.data.loc[self.matched.index, :]
+            self.matched['weight'] = weights
+        return self.matched.copy()
+
+    def bins_gen(self, d):
+        ''' Individual coarsening dict generator '''
+        from itertools import product
+        keys, values = d.keys(), d.values()
+        combinations = product(*values)
+        for c in combinations:
+            yield dict(zip(keys, c))
+
+    def relax(self, bins):
+        ''' Match on several coarsenings and evaluate L1 metric '''
+        from tqdm import tqdm
+        rows = []
+        length = np.prod([len(x) for x in bins.values()])
+        for bins_i in tqdm(self.bins_gen(bins), total=length):
+            matched = self.match(bins_i)
+            if len(matched):
+                L1 = self.score(matched.drop('weight', axis=1))
+                vc = matched[self.treatment].value_counts()
+                rows.append([L1, vc[0], vc[1], bins_i])
+            else:
+                rows.append([1, None, None, bins_i])
+        results = pd.DataFrame.from_records(
+            rows, columns=['statistic', 'controls', 'treatments', 'coarsening'])
+        return results
+
+    def regress(self, bins=None):
+        if bins is None:
+            assert self.matched is not None, 'Match data via coursening first.'
+            return self._regress_matched()
+        else:
+            n_lists = sum(isinstance(x, (list, tuple)) for x in bins.values())
+            if n_lists > 1:
+                raise NotImplementedError('Cant handle depth>1 regression yet.')
+            elif n_lists == 1:
+                # Regress at different coarsenings
+                raise NotImplementedError('TODO')
+            else:
+                self.match(bins)
+                return self._regress_matched()
+
+    def _regress_matched(self):
+        right = ' + '.join(self.matched.drop([self.outcome, 'weight'], axis=1).columns.values)
+        formula = f'{self.outcome} ~ {right}'
+        glm = smf.glm(formula, data=self.matched, family=sm.families.Binomial(),
+                      var_weights=self.matched['weight'])
+        result = glm.fit(method='newton')
+        return result.summary()
+
+    def coarsen(self, data, bins):
+        ''' Coarsen data based on schema '''
+        df_coarse = data.apply(lambda x: pd.cut(x, bins=bins[x.name], labels=False), axis=0)
+        return df_coarse
+
+    def weight(self, group, mT, mC):
+        ''' Calculate weights for regression '''
+        vc = group[self.treatment].value_counts()
+        mTs, mCs = vc[1], vc[0]
+        group['weight'] = pd.Series([1 if x[self.treatment] else (mC / mT) * (mTs / mCs)
+                                     for _, x in group.iterrows()], index=group.index)
+        return group
+
+    def score(self, data):
+        ''' Evaluate histogram similarity '''
+        treatments = data[self.treatment] == 1
+        controls = data[self.treatment] == 0
+        d = data.drop([self.outcome, self.treatment], axis=1)
+        cont_bins = 4
+        bins = [min(len(x.unique()), cont_bins) for _, x in d.items()]
+        ranges = [(x.min(), x.max()) for _, x in d.items()]
+        try:
+            ht, _ = np.histogramdd(d.loc[treatments, :].to_numpy(), bins=bins, range=ranges, density=False)
+            hc, _ = np.histogramdd(d.loc[controls, :].to_numpy(), bins=bins, range=ranges, density=False)
+            L1 = np.sum(np.abs(ht / len(treatments) - hc / len(controls))) / 2
+        except Exception as e:
+            print(e)
+            return 1
+        return L1
 
 
 def mahalanobis_frontier(data, on):
@@ -35,64 +141,6 @@ def mahalanobis_frontier(data, on):
             break
 
     return pd.DataFrame.from_dict({'pruned controls': pruned_controls, 'pruned treatments': pruned_treatments, 'AMD': AMD_, 'radius': radii}, orient='columns')
-
-
-def L_frontier(data, on):
-    controls = len(data[~data[on]])
-    treatments = len(data[data[on]])
-
-    ranges = get_ranges(data.drop(on, axis=1))
-    bins = get_bins(data.drop(on, axis=1))
-    print(ranges)
-    print(bins)
-
-    remaining = data.copy()
-    pruned_controls = []
-    pruned_treatments = []
-    results = []
-    while len(remaining):
-        # assess
-        result = L1(remaining, on, range=ranges, bins=bins, density=True)
-        print(f'L1: {round(result,1)}')
-        results.append(result)
-
-        pruned_controls.append(controls - len(remaining[~remaining[on]]))
-        pruned_treatments.append(treatments - len(remaining[~remaining[on]]))
-
-        # stopping criterion
-        if pruned_controls[-1] == controls or pruned_treatments == treatments or results[-1] == 0:
-            break
-
-        # prune
-        remaining = prune_by_hist(remaining, on, ranges, bins)
-
-    return pd.DataFrame.from_records([pruned_controls, pruned_treatments, results], columns=['pruned controls', 'pruned treatments', 'L1'])
-
-
-def prune_by_hist(data, on, ranges, bins):
-    (t_histd, edges), (c_histd, _) = get_hists(data, on, range=ranges, bins=bins, density=True)
-    (t_hist, _), (c_hist, _) = get_hists(data, on, range=ranges, bins=bins, density=False)
-    t_hist = np.array(t_hist, dtype=bool)
-    c_hist = np.array(c_hist, dtype=bool)
-    d_hist = (t_histd - c_histd) * t_hist * c_hist  # dont consider bins of only T or C
-    idx_absmax = np.unravel_index(np.argmax(abs(d_hist), axis=None), d_hist.shape)
-    left_edge = edges[idx_absmax]
-    right_edge = edges[(i + 1 for i in idx_absmax)]
-
-    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
-    if d_hist[idx_absmax] > 0:
-        treatment = drop_one_in_bin(treatment, left_edge, right_edge)
-    else:
-        control = drop_one_in_bin(control, left_edge, right_edge)
-    data = data.loc[treatment.index + control.index, :]
-    return data
-
-
-def drop_one_in_bin(data, left_edge, right_edge):
-    mask = [all(fi >= left_edge) and all(fi < right_edge) for fi in data.to_array()]
-    to_drop = data.loc[mask, :].sample(1).index[0]
-    data = data.drop(index=to_drop)
-    return data
 
 
 def prune_by_distance(distances, caliper: Union[int, float] = 5):
@@ -127,59 +175,6 @@ def match_by_distance(data, on, dv, distance, caliper):
     treatments, controls = prune_by_distance(distances, caliper)
     df_matched = data.loc[controls + treatments, :]
     return df_matched
-
-
-def match_by_L1(data, on, dv, l1):
-    pass
-
-
-def get_ranges(data):
-    ranges = [(data[c].min(), data[c].max()) for c in data.columns]
-    return ranges
-
-
-def get_bins(data):
-    bins = [len(data[c].unique()) for c in data.columns]
-    return bins
-
-
-def get_hists(data, on, **kwargs):
-    if "range" not in kwargs:
-        kwargs['range'] = get_ranges(data.drop(on, axis=1))
-    if "bins" not in kwargs:
-        kwargs['bins'] = get_bins(data.drop(on, axis=1))
-    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(data, on)))
-    t = np.histogramdd(treatment.to_numpy(), **kwargs)
-    c = np.histogramdd(control.to_numpy(), **kwargs)
-    return t, c
-
-
-def Ln(data, on, func, **kwargs):
-    t, c = get_hists(data, on, **kwargs)
-    res = func(t[0], c[0])
-    return res
-
-
-def L1(data, on, **kwargs):
-    return Ln(data, on, lambda x, y: np.sum(np.abs(x - y)) / 2, **kwargs)
-
-
-def L2(data, on, **kwargs):
-    return Ln(data, on, lambda x, y: np.sqrt(np.sum((x - y)**2) / 2), **kwargs)
-
-
-def dom(data, on, func):
-    norm = (data - data.mean()) / data.std()
-    treatment, control = list(map(lambda x: x.drop(on, axis=1), split(norm, on)))
-    return func(treatment.mean() - control.mean())
-
-
-def dom_2(data, on):
-    return dom(data, on, lambda x: np.sqrt(np.sum(x**2) / len(x)))
-
-
-def dom_1(data, on):
-    return dom(data, on, lambda x: np.sum(x.abs()) / len(x))
 
 
 def split(data, on):
@@ -246,67 +241,3 @@ def binom_z_tests(data, on):
             res.append([z, norm.sf(abs(z)) * 2])
 
     return pd.DataFrame.from_records(res, index=data.drop(on, axis=1).columns, columns=['statistic'])
-
-
-# def match_with_replacement(distance_matrix, threshold):
-
-#     matches = {}
-#     if more_control:
-#         iterator = distance_matrix.items()  # iterate over treatment
-#     else:
-#         iterator = distance_matrix.iterrows()  # iterate over control
-
-#     for l_idx, row in iterator:
-#         if row.min() < threshold:
-#             matches[l_idx] = {'match': row.idxmin(), 'dist': row.min()}
-#     return matches
-
-
-# def approximate_matches(distance_matrix, threshold):
-#     # sort the treatment neightbours of each control example
-#     distances = {c_idx: list(prune(lambda x: x[-1] <= threshold, sorted(
-#         zip(row.index, row), key=lambda x: x[-1]))) for c_idx, row in distance_matrix.iterrows()}
-#     # take a step forward for each control, noting the treatment examples removed from the available pool every time
-#     # this isnt optimal but it might be an okay approximation
-#     matches = {}
-#     no_match = set()
-#     step = 1
-#     while len(matches) + len(no_match) < len(distance_matrix.index):
-#         print(f'Step {step}')
-#         new_distances = {}
-#         for c_idx, remaining in distances.items():
-#             if len(remaining):
-#                 t_idx, dist = remaining[0]
-#                 if t_idx not in matches:
-#                     # add match
-#                     print(f'Match {c_idx} -> {t_idx} ({round(dist,1)})')
-#                     matches[t_idx] = {'match': c_idx, 'dist': dist}
-#                 else:
-#                     # already matched, step forward instead
-#                     control_exists = matches[t_idx]['match']
-#                     print(
-#                         f'{c_idx} -> {t_idx} ({round(dist,1)}) already taken by {control_exists} -> {t_idx}, {len(remaining[1:])} options remaining.')
-#                     new_distances[c_idx] = remaining[1:]
-#             else:
-#                 # no treatments available to match (i.e. the rest were further than caliper value away)
-#                 print(f'No more available matches for {c_idx}.')
-#                 no_match.add(c_idx)
-#         distances = new_distances
-#         step += 1
-#     return matches
-
-
-# def get_graph(u: pd.DataFrame, c):
-#     graph = nx.Graph()
-#     for c_idx, row in u.iterrows():
-#         for t_idx, dist in row.items():
-#             if dist <= c:
-#                 graph.add_edge(t_idx, c_idx, weight=-dist)  # negative distances for minimum weight matching
-#     return graph
-
-
-# def graphical_matches(data: pd.DataFrame, threshold):
-#     graph = get_graph(data, threshold)
-#     matches = mwm(graph, maxcardinality=True)
-#     # NOTE: key is not guaranteed to be the treatment example in the match
-#     return {k: {'match': v, 'dist': -graph.get_edge_data(k, v)['weight']} for k, v in matches}
