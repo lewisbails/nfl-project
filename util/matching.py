@@ -19,22 +19,23 @@ class CEM:
         self.outcome = outcome
         self.treatment = treatment
         self.matched = None
+        self.weights = None
 
     def match(self, bins):
         ''' Return matched data given a coursening '''
         # coarsen based on supplied bins
-        coarsened = self.coarsen(self.data, bins)
+        coarsened = self.coarsen(self.data.drop(self.outcome, axis=1), bins)
+        # init weights
+        self.weights = pd.Series([0] * len(self.data), index=self.data.index)
         # filter groups with only control or treatment examples
         gb = list(self.data.drop([self.outcome, self.treatment], axis=1).columns.values)
-        self.matched = coarsened.groupby(gb).filter(lambda x: len(x[self.treatment].unique()) > 1)
-        # weight samples
-        if len(self.matched):
-            vc = self.matched[self.treatment].value_counts()
-            mT, mC = vc[1], vc[0]
-            weights = self.matched.groupby(gb).apply(lambda x: self.weight(x, mT, mC))['weight']
-            self.matched = self.data.loc[self.matched.index, :]
-            self.matched['weight'] = weights
-        return self.matched.copy()
+        matched = coarsened.groupby(gb).filter(lambda x: len(x[self.treatment].unique()) > 1)
+        if len(matched):
+            vc = matched[self.treatment].value_counts()
+            mT, mC = vc.loc[True], vc.loc[False]
+            weights = matched.groupby(gb).apply(lambda x: self.weight(x, mT, mC))['weight']
+            self.weights = self.weights.add(weights, fill_value=0)
+        return self.weights
 
     def bins_gen(self, d):
         ''' Individual coarsening dict generator '''
@@ -50,51 +51,68 @@ class CEM:
         rows = []
         length = np.prod([len(x) for x in bins.values()])
         for bins_i in tqdm(self.bins_gen(bins), total=length):
-            matched = self.match(bins_i)
-            if len(matched):
-                L1 = self.score(matched.drop('weight', axis=1))
-                vc = matched[self.treatment].value_counts()
-                rows.append([L1, vc[0], vc[1], bins_i])
+            self.match(bins_i)
+            if (self.weights > 0).sum():
+                d = self.data.loc[self.weights > 0, :]
+                L1 = self.score(d)
+                vc = d[self.treatment].value_counts()
+                rows.append([L1, vc[False], vc[True], bins_i])
             else:
                 rows.append([1, None, None, bins_i])
         results = pd.DataFrame.from_records(
             rows, columns=['statistic', 'controls', 'treatments', 'coarsening'])
         return results
 
-    def regress(self, bins=None):
+    def regress(self, bins=None, drop=[]):
+        bins = bins.copy()
         if bins is None:
-            assert self.matched is not None, 'Match data via coursening first.'
+            assert self.weights is not None, 'No weights. Match data via coursening first.'
             return self._regress_matched()
         else:
-            n_lists = sum(isinstance(x, (list, tuple)) for x in bins.values())
+            n_lists = sum(isinstance(x, (list, tuple, range)) for x in bins.values())
             if n_lists > 1:
                 raise NotImplementedError('Cant handle depth>1 regression yet.')
             elif n_lists == 1:
                 # Regress at different coarsenings
-                raise NotImplementedError('TODO')
+                results = {}
+                k = list(filter(lambda k: isinstance(bins[k], (list, tuple, range)), bins))[0]
+                v = bins[k]
+                for i in tqdm(v):
+                    bins.update({k: i})
+                    self.match(bins)
+                    results[i] = {'summary': self._regress_matched(drop),
+                                  'n_bins': i,
+                                  'var': k,
+                                  'vc': self.data.loc[self.weights > 0, self.treatment].value_counts()}
+                return results
             else:
                 self.match(bins)
-                return self._regress_matched()
+                return self._regress_matched(drop)
 
-    def _regress_matched(self):
-        right = ' + '.join(self.matched.drop([self.outcome, 'weight'], axis=1).columns.values)
+    def _regress_matched(self, drop):
+        weights = self.weights[self.weights > 0]
+        data = self.data.loc[weights.index, :]
+
+        right = ' + '.join(data.drop([self.outcome] + drop, axis=1).columns.values)
         formula = f'{self.outcome} ~ {right}'
-        glm = smf.glm(formula, data=self.matched, family=sm.families.Binomial(),
-                      var_weights=self.matched['weight'])
-        result = glm.fit(method='newton')
+        glm = smf.glm(formula, data=data, family=sm.families.Binomial(),
+                      var_weights=weights)
+        result = glm.fit(method='bfgs')
         return result.summary()
 
     def coarsen(self, data, bins):
         ''' Coarsen data based on schema '''
         df_coarse = data.apply(lambda x: pd.cut(x, bins=bins[x.name], labels=False), axis=0)
+        df_coarse[self.treatment] = df_coarse[self.treatment].astype(bool)
         return df_coarse
 
     def weight(self, group, mT, mC):
         ''' Calculate weights for regression '''
         vc = group[self.treatment].value_counts()
-        mTs, mCs = vc[1], vc[0]
-        group['weight'] = pd.Series([1 if x[self.treatment] else (mC / mT) * (mTs / mCs)
-                                     for _, x in group.iterrows()], index=group.index)
+        mTs, mCs = vc.loc[True], vc.loc[False]
+        weights = pd.Series({i: 1 if x else (mC / mT) * (mTs / mCs)
+                             for i, x in group[self.treatment].iteritems()})
+        group['weight'] = weights
         return group
 
     def score(self, data):
@@ -113,6 +131,25 @@ class CEM:
             print(e)
             return 1
         return L1
+
+
+def summary_to_frame(summary, n_bins, vc, dtype=None):
+    observations = pd.read_html(summary.tables[0].as_html())[0].iloc[0, 3]
+    results = pd.read_html(summary.tables[1].as_html())[0]
+    results.iloc[0, 0] = 'covariate'
+    results.columns = results.iloc[0]
+    results = results[1:]
+    results['observations'] = observations
+    results['n_bins'] = n_bins
+    results['controls'] = vc[False]
+    results['treatments'] = vc[True]
+    results['coef'] = results['coef'].astype(float)
+    results['P>|z|'] = results['P>|z|'].astype(float)
+    if dtype:
+        for c in results.columns:
+            if results[c].dtype not in (object, bool):
+                results[c] = results[c].astype(dtype)
+    return results
 
 
 def mahalanobis_frontier(data, on):
