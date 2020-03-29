@@ -21,7 +21,7 @@ class CEM:
         self.matched = None
         self.weights = None
 
-    def match(self, bins):
+    def match(self, bins, one_to_many=True):
         ''' Return matched data given a coursening '''
         # coarsen based on supplied bins
         coarsened = self.coarsen(self.data.drop(self.outcome, axis=1), bins)
@@ -30,11 +30,13 @@ class CEM:
         # filter groups with only control or treatment examples
         gb = list(self.data.drop([self.outcome, self.treatment], axis=1).columns.values)
         matched = coarsened.groupby(gb).filter(lambda x: len(x[self.treatment].unique()) > 1)
-        if len(matched):
+        if len(matched) and one_to_many:
             vc = matched[self.treatment].value_counts()
             mT, mC = vc.loc[True], vc.loc[False]
             weights = matched.groupby(gb).apply(lambda x: self.weight(x, mT, mC))['weight']
             self.weights = self.weights.add(weights, fill_value=0)
+        else:
+            # TODO: 1:1 matching using bhattacharya for each stratum, weight is 1 for the control and its treatment pair
         return self.weights
 
     def bins_gen(self, d):
