@@ -64,11 +64,11 @@ class CEM:
         return results
 
     def regress(self, bins=None, drop=[]):
-        bins = bins.copy()
         if bins is None:
             assert self.weights is not None, 'No weights. Match data via coursening first.'
-            return self._regress_matched()
+            return self._regress_matched(drop)
         else:
+            bins = bins.copy()
             n_lists = sum(isinstance(x, (list, tuple, range)) for x in bins.values())
             if n_lists > 1:
                 raise NotImplementedError('Cant handle depth>1 regression yet.')
@@ -102,7 +102,8 @@ class CEM:
 
     def coarsen(self, data, bins):
         ''' Coarsen data based on schema '''
-        df_coarse = data.apply(lambda x: pd.cut(x, bins=bins[x.name], labels=False), axis=0)
+        df_coarse = data.apply(lambda x: pd.cut(
+            x, bins=bins[x.name], labels=False) if x.name != self.treatment else x, axis=0)
         df_coarse[self.treatment] = df_coarse[self.treatment].astype(bool)
         return df_coarse
 
@@ -115,8 +116,12 @@ class CEM:
         group['weight'] = weights
         return group
 
-    def score(self, data):
+    def score(self, data=None):
         ''' Evaluate histogram similarity '''
+        if data is None:
+            if self.weights is None:
+                raise Exception('Match with coarsening first.')
+            data = self.data.loc[self.weights > 0, :].copy()
         treatments = data[self.treatment] == 1
         controls = data[self.treatment] == 0
         d = data.drop([self.outcome, self.treatment], axis=1)
@@ -131,6 +136,27 @@ class CEM:
             print(e)
             return 1
         return L1
+
+    def LSATT(self):
+        from scipy.stats import ttest_ind_from_stats
+        from functools import reduce
+        from collections import OrderedDict
+        df2 = pd.concat((self.data, self.weights.rename('weights')), axis=1)
+        df2 = df2.loc[df2['weights'] > 0, :]
+        res = OrderedDict()
+        for i, g in df2.groupby(self.treatment):
+            weight = g['weights'].sum()
+
+            WSOUT = (g[self.outcome] * g['weights']).sum()
+            wave = WSOUT / weight
+
+            ave = g[self.outcome].mean()
+            WSSR = (g['weights'] * (g[self.outcome] - ave)**2).sum()
+            wstd = np.sqrt(WSSR / weight)
+
+            res[i] = [wave, wstd, len(g)]
+
+        return res, ttest_ind_from_stats(*list(reduce(lambda x, y: x + y, res.values())), equal_var=False)
 
 
 def summary_to_frame(summary, n_bins, vc, dtype=None):
