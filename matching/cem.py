@@ -9,6 +9,10 @@ from tqdm import tqdm
 import statsmodels.formula.api as smf
 import statsmodels.api as sm
 from copy import deepcopy
+from itertools import combinations, product
+from collections import OrderedDict
+from scipy.stats import ttest_ind_from_stats
+from functools import reduce
 
 
 class CEM:
@@ -30,7 +34,7 @@ class CEM:
         if len(matched) and one_to_many:
             weights = CEM.weight(matched, treatment, weights)
         else:
-            pass
+            raise NotImplementedError
             # TODO: 1:1 matching using bhattacharya for each stratum, weight is 1 for the control and its treatment pair
         return weights
 
@@ -53,8 +57,6 @@ class CEM:
     @staticmethod
     def _bins_gen(d):
         ''' Individual coarsening dict generator '''
-        from itertools import product
-        from collections import OrderedDict
         od = OrderedDict(d)
         covariate, values = od.keys(), od.values()
         cut_types = [v['cut'] for v in values]
@@ -68,12 +70,15 @@ class CEM:
             yield dict(dd)
 
     @staticmethod
-    def relax(data, treatment, bins, measure='l1', balance_bins={}):
+    def relax(data, treatment, bins, measure='l1', continuous=[]):
         ''' Match on several coarsenings and evaluate some imbalance measure '''
-        from tqdm import tqdm
         data_ = data.copy()
-        rows = []
         length = np.prod([len(x['bins']) for x in bins.values()])
+
+        imb_params = CEM.get_imbalance_params(data_.drop(
+            treatment, axis=1), measure, continuous)  # indep. of any coarsening
+
+        rows = []
         for bins_i in tqdm(CEM._bins_gen(bins), total=length):
             weights = CEM.match(data_, treatment, bins_i)
             nbins = np.prod([x['bins'] for x in bins_i.values()])
@@ -83,7 +88,7 @@ class CEM:
                     # continuous treatment binning
                     d[treatment] = CEM._cut(d[treatment], bins_i[treatment]
                                             ['cut'], bins_i[treatment]['bins'])
-                score = CEM.imbalance(d, treatment, measure, **balance_bins)
+                score = CEM.imbalance(d, treatment, measure, **imb_params)
                 vc = d[treatment].value_counts()
                 row = {'imbalance': score, 'coarsening': bins_i, 'bins': nbins}
                 row.update({f'treatment_{t}': c for t, c in vc.items()})
@@ -93,12 +98,14 @@ class CEM:
         return pd.DataFrame.from_records(rows)
 
     @staticmethod
-    def regress(data, treatment, outcome, bins, measure='l1', formula=None, drop=[], balance_bins={}):
+    def regress(data, treatment, outcome, bins, measure='l1', formula=None, drop=[], continuous=[]):
         '''Regress on 1 or more coarsenings and return a summary and imbalance measure'''
         data_ = data.copy()
         bins_ = deepcopy(bins)
+
         if not formula:
             formula = CEM._infer_formula(data_, outcome, drop)
+
         n_relax = sum(isinstance(x['bins'], range) for x in bins_.values())
         if n_relax > 1:
             raise NotImplementedError('Cant handle depth>1 regression yet.')
@@ -111,7 +118,7 @@ class CEM:
             print(f'Regressing with {len(v)} different pd.{method} binnings on "{k}"\n')
             for i in tqdm(v):
                 bins_[k].update({'bins': i})
-                row = CEM.regress(data_, treatment, outcome, bins_, formula=formula)
+                row = CEM.regress(data_, treatment, outcome, bins_, formula=formula, continuous=continuous)
                 row['n_bins'] = i
                 row['var'] = k
                 rows.append(row)
@@ -122,11 +129,13 @@ class CEM:
             # weights
             weights_ = CEM.match(data_.drop(outcome, axis=1), treatment, bins_)
             # imbalance
+            imb_params = CEM.get_imbalance_params(data_.drop(
+                [treatment, outcome], axis=1), measure, continuous)  # indep. of any coarsening
             d = data_.drop(outcome, axis=1).loc[weights_ > 0, :]
             if treatment in bins_:
                 d[treatment] = CEM._cut(d[treatment], bins_[treatment]['cut'], bins_[
                     treatment]['bins'])  # labels will be ints
-            score = CEM.imbalance(d, treatment, measure, **balance_bins)
+            score = CEM.imbalance(d, treatment, measure, **imb_params)
             # regression
             res = CEM._regress_matched(data_, formula, weights_)
             # counts
@@ -173,20 +182,35 @@ class CEM:
             raise NotImplementedError(f'"{measure}" not a valid measure.')
 
     @staticmethod
-    def _L1(data, treatment, **kwargs):
-        from itertools import combinations
-        from collections import OrderedDict
+    def univariate_imbalance(data, treatment, measure='l1', bins=None, ranges=None):
+        assert len(data.drop(treatment, axis=1).columns) == len(bins) == len(ranges), 'Lengths not equal.'
+        if measure != 'l1':
+            raise NotImplementedError('Only L1 possible at the moment.')
+        marginal = {}
+        for col, bin_, range_ in zip(data.drop(treatment, axis=1).columns, bins, ranges):
+            cem_imbalance = CEM.imbalance(data.loc[:, [col, treatment]],
+                                          treatment, bins=[bin_], ranges=[range_])
+            marginal[col] = pd.Series({'imbalance': cem_imbalance, 'measure': measure,
+                                       'statistic': None, 'type': None, 'min': None, 'max': None})
+        return pd.DataFrame.from_dict(marginal, orient='index')
+
+    @staticmethod
+    def _L1(data, treatment, bins=None, ranges=None, retargs=False, continuous=[], H=5):
+
         groups = data.groupby(treatment).groups
         data_ = data.drop(treatment, axis=1).copy()
-        cont_bins = 4  # arbitrary choice?
-        bins = [min(len(x.unique()), cont_bins) if name not in kwargs else kwargs[name]
-                for name, x in data_.items()]
-        ranges = [(x.min(), x.max()) for _, x in data_.items()]
+
+        if len(continuous):
+            params = CEM.get_imbalance_params(data_, 'l1', continuous=continuous, H=H)
+            bins, ranges = params['bins'], params['ranges']
+        else:
+            if bins is None or ranges is None:
+                raise Exception('continuous parameter not supplied but neither are the bins and ranges.')
+
         try:
             h = {}
             for k, i in groups.items():
-                h[k] = np.histogramdd(data_.loc[i, :].to_numpy(), bins=bins,
-                                      range=ranges, density=False)[0]
+                h[k] = np.histogramdd(data_.loc[i, :].to_numpy(), density=False, bins=bins, range=ranges)[0]
             L1 = {}
             for pair in map(dict, combinations(h.items(), 2)):
                 pair = OrderedDict(pair)
@@ -195,17 +219,38 @@ class CEM:
                     np.abs(h_left / len(groups[k_left]) - h_right / len(groups[k_right]))) / 2
         except Exception as e:
             print(e)
+            print(len(bins), len(ranges), len(data_.columns), data_.columns)
+            if retargs:
+                return 1, (bins, ranges)
             return 1
         if len(L1) == 1:
+            if retargs:
+                return list(L1.values())[0], (bins, ranges)
             return list(L1.values())[0]
+        if retargs:
+            return L1, (bins, ranges)
         return L1
+
+    @staticmethod
+    def get_imbalance_params(data, measure, **kwargs):
+        # L1 binnings are set outside of any coarsening
+        if measure == 'l1':
+            imb_params = CEM._bins_ranges_for_L1(data, kwargs.get('continuous', []), kwargs.get('H', 5))
+        else:
+            imb_params = {}
+        return imb_params
+
+    @staticmethod
+    def _bins_ranges_for_L1(data, continuous, H):
+        bins = [min(x.nunique(), H) if name in continuous else x.nunique()
+                for name, x in data.items()]
+        ranges = [(x.min(), x.max()) for _, x in data.items()]
+        return {'bins': bins, 'ranges': ranges}
 
     @staticmethod
     def LSATT(data, treatment, outcome, weights):
         # only currently valid for dichotamous treatments
-        from scipy.stats import ttest_ind_from_stats
-        from functools import reduce
-        from collections import OrderedDict
+
         df2 = pd.concat((data, weights.rename('weights')), axis=1)
         df2 = df2.loc[df2['weights'] > 0, :]
         res = OrderedDict()
@@ -235,24 +280,12 @@ class CemFrame(pd.DataFrame):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def from_dict(cls, data, orient="columns", dtype=None, columns=None) -> "CemFrame":
-        # copied from Pandas
-        index = None
-        orient = orient.lower()
-        if orient == "index":
-            if len(data) > 0:
-                # TODO speed up Series case
-                if isinstance(list(data.values())[0], (Series, dict)):
-                    data = _from_nested_dict(data)
-                else:
-                    data, index = list(data.values()), list(data.keys())
-        elif orient == "columns":
-            if columns is not None:
-                raise ValueError("cannot use columns parameter with orient='columns'")
-        else:  # pragma: no cover
-            raise ValueError("only recognize index or columns for orient")
+    def from_records(cls, *args, **kwargs) -> "CemFrame":
+        return super(CemFrame, cls).from_records(*args, **kwargs)
 
-        return cls(data, index=index, columns=columns, dtype=dtype)
+    @classmethod
+    def from_dict(cls, *args, **kwargs) -> "CemFrame":
+        return super(CemFrame, cls).from_dict(*args, **kwargs)
 
     def _sm_summary_to_frame(self, summary):
         pd_summary = pd.read_html(summary.tables[1].as_html())[0]
@@ -341,22 +374,22 @@ class CemFrame(pd.DataFrame):
         return ax
 
 
-def marginals(data, on, kde=True, hist=True, n_bins=10):
-    vals = data[on].unique()
+def marginals(data, treatment, kde=True, hist=True, n_bins=10):
+    vals = data[treatment].unique()
     flatui = ["#2ecc71", "#9b59b6", "#3498db", "#e74c3c", "#34495e"]
 
-    for col in data.drop(on, axis=1).columns:
-        bins = np.linspace(data[col].min(), data[col].max(), n_bins) if hist else None
+    for col in data.drop(treatment, axis=1).columns:
+        bins = np.linspace(data[col].min(), data[col].max(), n_bins + 1) if hist else None
         try:
             for i, val in enumerate(vals):
-                sns.distplot(data[data[on] == val][col],
-                             bins=bins, label=f'{on}={val}', kde=kde, norm_hist=hist, hist=hist, color=flatui[i])
-                plt.axvline(data[data[on] == val][col].mean(), color=flatui[i])
+                sns.distplot(data[data[treatment] == val][col],
+                             bins=bins, label=f'{treatment}={val}', kde=kde, norm_hist=hist, hist=hist, color=flatui[i])
+                plt.axvline(data[data[treatment] == val][col].mean(), color=flatui[i])
         except:
             for i, val in enumerate(vals):
-                sns.distplot(data[data[on] == val][col],
-                             bins=bins, label=f'{on}={val}', kde=False, norm_hist=True, hist=True, color=flatui[i])
-                plt.axvline(data[data[on] == val][col].mean(), color=flatui[i])
+                sns.distplot(data[data[treatment] == val][col],
+                             bins=bins, label=f'{treatment}={val}', kde=False, norm_hist=True, hist=True, color=flatui[i])
+                plt.axvline(data[data[treatment] == val][col].mean(), color=flatui[i])
 
         plt.title(f'{col} distributions')
         plt.legend()
