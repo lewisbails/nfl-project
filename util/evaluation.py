@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def odds(coefficients: pd.Series, **kwargs):
+def odds(coefficients: pd.Series, significant: pd.Series, **kwargs):
     ''' Added odds thanks to these coefficients and theyre values '''
 
     # becomes odds ratio if the alternate would result in np.exp(..)=1
@@ -14,22 +14,22 @@ def odds(coefficients: pd.Series, **kwargs):
     # main
     for arg, val in kwargs.items():
         try:
-            sum_ += coefficients[arg] * val
+            sum_ += coefficients[arg] * significant[arg] * val
         except:
             pass
     # interactions
     for i, j in itertools.combinations(kwargs.keys(), 2):
         try:
-            sum_ += coefficients[f'{i}:{j}'] * kwargs[i] * kwargs[j]
+            sum_ += coefficients[f'{i}:{j}'] * significant[f'{i}:{j}'] * kwargs[i] * kwargs[j]
         except:
             try:
-                sum_ += coefficients[f'{j}:{i}'] * kwargs[i] * kwargs[j]
+                sum_ += coefficients[f'{j}:{i}'] * significant[f'{j}:{i}'] * kwargs[i] * kwargs[j]
             except:
                 pass
     # polynomials
     for arg, val in kwargs.items():
         try:
-            sum_ += coefficients[arg + ' ^ 2'] * val
+            sum_ += coefficients[arg + ' ^ 2'] * significant[arg + ' ^ 2'] * val
         except:
             pass
 
