@@ -272,8 +272,8 @@ class UnivariateBalance:
                 _, p = ttest_ind(d_treatment, d_control, equal_var=False)
                 type_ = 'diff'
             else:  # binary variables
-                f_obs = d_treatment.value_counts(normalize=True)
-                f_exp = d_control.value_counts(normalize=True)
+                f_obs = d_treatment.value_counts(normalize=False)
+                f_exp = d_control.value_counts(normalize=False)
                 stat, p = chisquare(f_obs, f_exp)
                 type_ = 'Chi2'
 
@@ -505,11 +505,11 @@ class Relax:
             s[x] = range(len(s))
             s = s.sort_values('% matched')
         fig, ax = plt.subplots()
-        ax = sns.lineplot(x=x, y='% matched', data=s, style='measure', markers=True, **kwargs)
+        ax = sns.lineplot(x=x, y='imbalance', data=s, style='measure', markers=True, **kwargs)
         fig.set_size_inches(12, 8)
         ax.set_title('Multivariate L1 for progressive coarsening')
         for _, row in s.iterrows():
-            ax.text(row[x] + 0.1, row['% matched'] + 0.1, round(row['imbalance'], 2), fontsize=10)
+            ax.text(row[x] + 0.15, row['imbalance'] + 0.001, round(row['% matched'], 2), fontsize=10)
         return ax, s
 
     def _plot_univariate(self, **kwargs):
@@ -528,6 +528,7 @@ class Relax:
         ax = sns.lineplot(x=x, y='imbalance', hue='covariate', data=s, ax=ax, **kwargs)
         ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
         fig.set_size_inches(12, 8)
+        return ax
 
     def plot(self, name, **kwargs):
         if name in ('multivariate', 'multi'):
@@ -652,7 +653,7 @@ def regress(data, treatment, outcome, coarsening, relax_vars=[], formula=None, d
         print(f'Regressing with {len(v)} different pd.{method} binnings on "{k}"\n')
         for i in tqdm(v):
             coarsening_[k].update({'bins': i, 'method': method})
-            row = regress(data_, treatment, outcome, coarsening_, formula=formula)  # recurse
+            row = regress(data_, treatment, outcome, coarsening_, formula=formula, family=family)  # recurse
             row['n_bins'] = i
             row['var'] = k
             rows.append(row)

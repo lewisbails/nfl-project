@@ -26,6 +26,15 @@ def odds(coefficients: pd.Series, significant: pd.Series, **kwargs):
                 sum_ += coefficients[f'{j}:{i}'] * significant[f'{j}:{i}'] * kwargs[i] * kwargs[j]
             except:
                 pass
+    # polynomial interactions
+    for i, j in itertools.combinations(kwargs.keys(), 2):
+        try:
+            sum_ += coefficients[f'{i}:{j} ^ 2'] * significant[f'{i}:{j} ^ 2'] * kwargs[i] * kwargs[j]
+        except:
+            try:
+                sum_ += coefficients[f'{j}:{i} ^ 2'] * significant[f'{j}:{i} ^ 2'] * kwargs[i] * kwargs[j]
+            except:
+                pass
     # polynomials
     for arg, val in kwargs.items():
         try:
