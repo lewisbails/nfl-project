@@ -3,46 +3,32 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 import matplotlib.pyplot as plt
+from functools import reduce
+from scipy.stats import norm
 
 
-def odds(coefficients: pd.Series, significant: pd.Series, **kwargs):
+def odds(data, p=1, ci=95, **kwargs):
     ''' Added odds thanks to these coefficients and theyre values '''
-
-    # becomes odds ratio if the alternate would result in np.exp(..)=1
-    # print(kwargs, end='')
-    sum_ = 0
-    # main
-    for arg, val in kwargs.items():
+    kwargs.update({'np': np})
+    total = 0
+    total_low = 0
+    total_up = 0
+    z = norm.ppf(ci / 100)
+    for cov, row in data.iterrows():
+        cov_ = cov.replace(':', '*')
         try:
-            sum_ += coefficients[arg] * significant[arg] * val
+            val = eval(cov_, kwargs)
+            sig = row['P>|z|'] <= p
+            coef = row['coef']
+            coef_upper = coef + z * row['std err']
+            coef_lower = coef - z * row['std err']
+            lower, upper = sorted([val * coef_upper, val * coef_lower])
+            total += val * sig * coef
+            total_low += lower
+            total_up += upper
         except:
-            pass
-    # interactions
-    for i, j in itertools.combinations(kwargs.keys(), 2):
-        try:
-            sum_ += coefficients[f'{i}:{j}'] * significant[f'{i}:{j}'] * kwargs[i] * kwargs[j]
-        except:
-            try:
-                sum_ += coefficients[f'{j}:{i}'] * significant[f'{j}:{i}'] * kwargs[i] * kwargs[j]
-            except:
-                pass
-    # polynomial interactions
-    for i, j in itertools.combinations(kwargs.keys(), 2):
-        try:
-            sum_ += coefficients[f'{i}:{j} ^ 2'] * significant[f'{i}:{j} ^ 2'] * kwargs[i] * kwargs[j]
-        except:
-            try:
-                sum_ += coefficients[f'{j}:{i} ^ 2'] * significant[f'{j}:{i} ^ 2'] * kwargs[i] * kwargs[j]
-            except:
-                pass
-    # polynomials
-    for arg, val in kwargs.items():
-        try:
-            sum_ += coefficients[arg + ' ^ 2'] * significant[arg + ' ^ 2'] * val
-        except:
-            pass
-
-    return np.exp(sum_)
+            continue
+    return np.exp(total), np.exp(total_low), np.exp(total_up)
 
 
 def confusion(covs: list, coefficients: pd.Series):

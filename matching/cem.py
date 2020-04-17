@@ -671,7 +671,7 @@ def _regress_matched(data, formula, weights, family):
                   data=data.loc[weights > 0, :],
                   family=family,
                   var_weights=weights[weights > 0])
-    result = glm.fit(method='bfgs')
+    result = glm.fit(method='bfgs', max_iter=1000)
     return result
 
 
