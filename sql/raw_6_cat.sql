@@ -1,5 +1,5 @@
 select
-    p.pid, fg.fkicker, fg.good, fg.dist,
+    p.pid, fg.fkicker, fg.good, fg.dist as distance,
     g.seas as year, k.seas as seasons,
     g.temp as temperature,
     g.H as home_team,

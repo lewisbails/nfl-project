@@ -606,8 +606,16 @@ def relax(data, treatment, coarsening, relax_vars, measure='l1', continuous=[], 
         weights = match(data_, treatment, coarsening_i)
         nbins = np.prod([x['bins'] if isinstance(x['bins'], int) else len(x['bins']) - 1
                          for x in coarsening_i.values()])
-        row = {'var': tuple(i[0] for i in relax_vars) if len(relax_vars) > 1 else relax_vars[0][0],
-               'n_bins': tuple(coarsening_i[i[0]]['bins'] for i in relax_vars) if len(relax_vars) > 1 else coarsening_i[relax_vars[0][0]]['bins']}
+        if len(relax_vars) > 1:
+            var = tuple(i[0] for i in relax_vars)
+            n_bins = tuple(coarsening_i[i[0]]['bins'] for i in relax_vars)
+        elif len(relax_vars) == 1:
+            var = relax_vars[0][0]
+            n_bins = coarsening_i[relax_vars[0][0]]['bins']
+        else:
+            var = None
+            n_bins = None
+        row = {'var': var, 'n_bins': n_bins}
         if (weights > 0).sum():
             d = data_.loc[weights > 0, :]
             if treatment in coarsening_i:
@@ -671,7 +679,7 @@ def _regress_matched(data, formula, weights, family):
                   data=data.loc[weights > 0, :],
                   family=family,
                   var_weights=weights[weights > 0])
-    result = glm.fit(method='bfgs', max_iter=1000)
+    result = glm.fit(method='bfgs', maxiter=100)
     return result
 
 

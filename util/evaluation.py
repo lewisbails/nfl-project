@@ -7,28 +7,20 @@ from functools import reduce
 from scipy.stats import norm
 
 
-def odds(data, p=1, ci=95, **kwargs):
+def odds(data, p=1, **kwargs):
     ''' Added odds thanks to these coefficients and theyre values '''
     kwargs.update({'np': np})
     total = 0
-    total_low = 0
-    total_up = 0
-    z = norm.ppf(ci / 100)
     for cov, row in data.iterrows():
         cov_ = cov.replace(':', '*')
         try:
             val = eval(cov_, kwargs)
             sig = row['P>|z|'] <= p
             coef = row['coef']
-            coef_upper = coef + z * row['std err']
-            coef_lower = coef - z * row['std err']
-            lower, upper = sorted([val * coef_upper, val * coef_lower])
             total += val * sig * coef
-            total_low += lower
-            total_up += upper
         except:
             continue
-    return np.exp(total), np.exp(total_low), np.exp(total_up)
+    return np.exp(total)
 
 
 def confusion(covs: list, coefficients: pd.Series):
