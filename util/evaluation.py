@@ -23,11 +23,10 @@ def residuals(group, sd=2):
     bound = sd * np.sqrt(avg_pred * (1 - avg_pred) / len(group))
     df = pd.DataFrame.from_dict({'pred': [avg_pred], 'residual': [avg_resid], 'bound': [bound], 'count': [
                                 len(group)], 'inside': (avg_resid <= bound) and (avg_resid >= -bound)}, orient='columns')
-    for c in continuous:
+    for c in group.drop(['pred', 'residual'], axis=1).columns:
         try:
             df[c] = group[c].mean()
         except Exception as e:
-            print(e)
             df[c] = np.nan
     return df
 
