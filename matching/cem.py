@@ -35,7 +35,7 @@ import statsmodels.api as sm
 
 from scipy.stats import ttest_ind_from_stats
 from scipy.stats import ttest_ind
-from scipy.stats import chisquare
+from scipy.stats import chi2_contingency
 
 from itertools import combinations, product
 from collections import OrderedDict
@@ -272,9 +272,9 @@ class UnivariateBalance:
                 _, p = ttest_ind(d_treatment, d_control, equal_var=False)
                 type_ = 'diff'
             else:  # binary variables
-                f_obs = d_treatment.value_counts(normalize=False)
-                f_exp = d_control.value_counts(normalize=False)
-                stat, p = chisquare(f_obs, f_exp)
+                a = data[self.treatment]
+                b = data[col]
+                stat, p, _, _ = chi2_contingency(pd.crosstab(a, b))
                 type_ = 'Chi2'
 
             q = [0, 0.25, 0.5, 0.75, 1]
