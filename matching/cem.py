@@ -70,7 +70,7 @@ class CEM:
     Attributes
     ---------
     data, treatment, outcome, continuous, H: see Parameters
-    bins : array_like
+    _bins : array_like
         Array of bin edges
     preimbalance : float
         The imbalance of the data prior to matching
@@ -84,29 +84,30 @@ class CEM:
         self.treatment = treatment
         self.outcome = outcome
         self.continuous = continuous
-        self.H = H
         self.measure = measure
-        self.bins = None
+        self._bins = None
         self.preimbalance = None
+        self.H = self._find_H() if H is None else H
 
-        #  find H, get bin edges
-        df = self.data.drop(outcome, axis=1)
-        if self.H is None:
-            print('Calculating H, this may take a few minutes.')
-            rows = []
-            cont_bins = range(1, 10)
-            imb = []
-            for h in cont_bins:
-                bins = get_imbalance_params(df.drop(self.treatment, axis=1),
-                                            self.measure, self.continuous, h)
-                l1 = imbalance(df, self.treatment, self.measure, bins)
-                imb.append(l1)
-            imb = pd.Series(imb, index=cont_bins)
-            self.H = (imb.sort_values(ascending=False) <= imb.quantile(.5)).idxmax()
-
-        self.bins = get_imbalance_params(df.drop(self.treatment, axis=1),
+        df = self.data.drop(self.outcome, axis=1)
+        self._bins = get_imbalance_params(df.drop(self.treatment, axis=1),
                                          self.measure, self.continuous, self.H)
-        self.preimbalance = imbalance(df, self.treatment, self.measure, self.bins)
+        self.preimbalance = imbalance(df, self.treatment, self.measure, self._bins)
+
+    def _find_H(self):
+        print('Calculating H, this may take a few minutes.')
+        rows = []
+        n_bins = range(1, 10)
+        imb = []
+        df = self.data.drop(outcome, axis=1)
+        for h in n_bins:
+            bins = get_imbalance_params(df.drop(self.treatment, axis=1),
+                                        self.measure, self.continuous, h)
+            imb_h = imbalance(df, self.treatment, self.measure, bins)
+            imb.append(imb_h)
+        imb = pd.Series(imb, index=n_bins)
+        return (imb.sort_values(ascending=False) <= imb.quantile(.5)).idxmax()
+
 
     def imbalance(self, coarsening: dict, one_to_many: bool = True) -> float:
         '''Calculate the imbalance remaining after matching the data using some coarsening
