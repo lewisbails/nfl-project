@@ -25,7 +25,6 @@ from __future__ import absolute_import
 import numpy as np
 import pandas as pd
 from pandas import Series
-from pandas.core.frame import _from_nested_dict
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -33,18 +32,13 @@ import seaborn as sns
 import statsmodels.formula.api as smf
 import statsmodels.api as sm
 
-from scipy.stats import ttest_ind_from_stats
-from scipy.stats import ttest_ind
-from scipy.stats import chi2_contingency
-
 from itertools import combinations, product
-from collections import OrderedDict
-from functools import reduce
+
 from copy import deepcopy
 from tqdm import tqdm
 from typing import Union
 
-from util.evaluation import odds
+from .imbalance import imbalance, get_imbalance_params, _univariate_imbalance
 
 __author__ = "Lewis Bails <lewis.bails@gmail.com>"
 __version__ = "0.1.0"
@@ -91,7 +85,7 @@ class CEM:
 
         df = self.data.drop(self.outcome, axis=1)
         self._bins = get_imbalance_params(df.drop(self.treatment, axis=1),
-                                         self.measure, self.continuous, self.H)
+                                          self.measure, self.continuous, self.H)
         self.preimbalance = imbalance(df, self.treatment, self.measure, self._bins)
 
     def _find_H(self):
@@ -107,7 +101,6 @@ class CEM:
             imb.append(imb_h)
         imb = pd.Series(imb, index=n_bins)
         return (imb.sort_values(ascending=False) <= imb.quantile(.5)).idxmax()
-
 
     def imbalance(self, coarsening: dict, one_to_many: bool = True) -> float:
         '''Calculate the imbalance remaining after matching the data using some coarsening
@@ -130,322 +123,28 @@ class CEM:
 
         weights = self.match(coarsening, one_to_many)
         df = self.data.drop(self.outcome, axis=1).loc[weights > 0, :]
-        return imbalance(df, self.treatment, self.measure, self.bins)
+        return imbalance(df, self.treatment, self.measure, self._bins)
 
-    def univariate_imbalance(self, coarsening: dict, one_to_many: bool = True):
-        '''Calculate the marginal imbalance remaining for each covariate post-matching
-
-        Parameters
-        ----------
-        coarsening, one_to_many: See imbalance.
-
-        Returns
-        -------
-        UnivariateImbalance:
-            Covariate residual imbalance and a plotting option.
-
-        '''
+    def univariate_imbalance(self, coarsening: dict = {}, one_to_many: bool = True):
+        ''' Calculate the marginal imbalance remaining for each covariate post-matching '''
         weights = self.match(coarsening, one_to_many)
         df = self.data.drop(self.outcome, axis=1).loc[weights > 0, :]
-        return UnivariateBalance(df, self.treatment, self.measure, self.bins)
+        return _univariate_imalance(df, self.treatment, self.measure, self.bins)
 
     def match(self, coarsening: dict, one_to_many: bool = True) -> pd.Series:
-        ''' Perform CEM using some coarsening schema
-
-        Parameters
-        ----------
-        coarsening, one_to_many: See imbalance.
-
-        Returns
-        -------
-        Series
-            Weights for each data point
-        '''
+        ''' Perform CEM using some coarsening schema '''
         return match(self.data.drop(self.outcome, axis=1), self.treatment, coarsening, one_to_many)
 
     def relax(self, coarsening: dict, relax_vars: 'array_like'):
-        ''' Evaluate the residual imbalance and match information for several coarsenings.
-
-        Parameters
-        ----------
-        coarsening: See imbalance.
-        relax_vars: array_like
-            3-tuples, combined to progressively modify the coarsening.
-            3-tuple is (name, iterable, cut_method).
-            The iterables' cartesian product is used for producing the combinations.
-
-        Returns
-        -------
-        Relax
-            Progressive coarsening results and plotting option
+        ''' Evaluate the residual imbalance and match information for several coarsenings. 
+        relax_vars is an iterable of 3-tuples (covariate, bins, method)
         '''
         return Relax(self.data.drop(self.outcome, axis=1), self.treatment, coarsening, relax_vars, self.measure,
                      bins=self.bins)
 
-    def regress(self, coarsening: dict,
-                relax_vars: 'array_like' = [],
-                formula: str = None,
-                drop: 'array_like' = [],
-                include_relax: bool = True,
-                family=None):
-        ''' Perform a log-linear regression for one or more coarsenings
-
-        Parameters
-        ----------
-        coarsening, relax_vars: See relax
-        formula: str, optional
-            GLM-like formula for the statsmodels model instance.
-        drop: array_like, optional
-            Not required if formula is given. Denotes covariates to drop from regression.
-        include_relax: bool, optional
-            Whether to return Relax which containing matching information for each coarsening.
-
-        Returns
-        -------
-        Regress
-            Regression results and plotting option
-        Relax
-            Progressive coarsening results and plotting option
-        '''
-        reg = Regress(self.data, self.treatment, self.outcome, coarsening,
-                      relax_vars=relax_vars, formula=formula,
-                      drop=drop, family=family)
-        if include_relax:
-            rel = self.relax(coarsening, relax_vars)
-            return reg, rel
-        return reg
-
-    def LATE(self, coarsening: dict, one_to_many: bool = True) -> tuple:
-        '''Local average treatment effect for some coarsening'''
-        weights = self.match(coarsening, one_to_many)
-        return LATE(self.data, self.treatment, self.outcome, weights)
-
-
-class UnivariateBalance:
-    '''Residual marginal imbalance for each covariate post-matching
-
-    Parameters
-    ----------
-    data: DataFrame
-        On which to calculate imbalance.
-    treatment: str
-        The variable defining treatment groups.
-    measure: str
-        Univariate imbalance measure to use.
-    bins: array_like, optional
-        Bin edges for constructing the histograms
-
-    Attributes
-    ----------
-    data, treatment, measure, bins: See parameters.
-    summary: pd.DataFrame
-        Imbalance statistics for each covariate
-    '''
-
-    def __init__(self, data: pd.DataFrame, treatment: str, measure: str, bins: 'array_like', weights=None):
-        assert len(data.drop(treatment, axis=1).columns) == len(bins), 'Lengths not equal.'
-        if measure not in ('l1', 'l2'):
-            raise NotImplementedError('Only L1/2 possible at the moment.')
-        self.data = data
-        self.treatment = treatment
-        self.measure = measure
-        self.bins = bins
-        self.weights = weights
-        self.summary = self._summarise(self.data)
-
-    # def _summarise(self) -> pd.DataFrame:
-    #     '''Calculate the marginal imbalances and return summary statistics'''
-    #     if self.weights:
-    #         return pd.concat({i: self._summarise_one(self.data.loc[w > 0, :]) for i, w in self.weights.items()})
-    #     else:
-    #         return self._summarise_one(self.data)
-
-    def _summarise(self, data):
-        marginal = {}
-        # it is assumed the elements of bins lines up with the data (minus the treatment column)
-        for col, bin_ in zip(data.drop(self.treatment, axis=1).columns, self.bins):
-            cem_imbalance = imbalance(data.loc[:, [col, self.treatment]],
-                                      self.treatment, self.measure, [bin_])
-            d_treatment = data.loc[data[self.treatment] > 0, col]
-            d_control = data.loc[data[self.treatment] == 0, col]
-            if data[col].nunique() > 2:
-                stat = d_treatment.mean() - d_control.mean()
-                _, p = ttest_ind(d_treatment, d_control, equal_var=False)
-                type_ = 'diff'
-            else:  # binary variables
-                a = data[self.treatment]
-                b = data[col]
-                stat, p, _, _ = chi2_contingency(pd.crosstab(a, b))
-                type_ = 'Chi2'
-
-            q = [0, 0.25, 0.5, 0.75, 1]
-            diffs = d_treatment.quantile(
-                q) - d_control.quantile(q) if type_ == 'diff' else pd.Series([None] * len(q), index=q)
-            row = {'imbalance': cem_imbalance, 'measure': self.measure,
-                   'statistic': stat, 'type': type_, 'P>|z|': p}
-            row.update({f'{int(i*100)}%': diffs[i] for i in q})
-            marginal[col] = pd.Series(row)
-        return pd.DataFrame.from_dict(marginal, orient='index')
-
-    def hist(self, kde=False, hist=True):
-        '''Marginal histogram/density plots'''
-        vals = self.data[self.treatment].unique()
-        flatui = ["#2ecc71", "#9b59b6", "#3498db", "#e74c3c", "#34495e"]  # TODO: change this
-
-        for col, bin_ in zip(self.data.drop(self.treatment, axis=1).columns, self.bins):
-            try:
-                for i, val in enumerate(vals):
-                    sns.distplot(self.data[self.data[self.treatment] == val][col],
-                                 bins=bin_, label=f'{self.treatment}={val}', kde=kde, norm_hist=hist, hist=hist, color=flatui[i])
-                    plt.axvline(self.data[self.data[self.treatment] == val][col].mean(), color=flatui[i])
-            except:
-                for i, val in enumerate(vals):
-                    sns.distplot(self.data[self.data[self.treatment] == val][col],
-                                 bins=bin_, label=f'{self.treatment}={val}', kde=False, norm_hist=True, hist=True, color=flatui[i])
-                    plt.axvline(self.data[self.data[self.treatment] == val][col].mean(), color=flatui[i])
-
-            plt.title(f'{col} distributions')
-            plt.show()
-
-
-class Regress:
-    '''Summarise results of a regression process on potentially several coarsenings.
-
-    Parameters
-    ----------
-    data: DataFrame
-        On which to calculate imbalance.
-    treatment: str
-        The variable defining treatment groups.
-    outcome: str
-        The outcome variable in data
-    coarsening: dict
-        Base coarsening schema
-    relax_vars: array_like, optional
-        3-tuples for defining progressive coarsening
-    formula: str, optional
-        GLM-like regression formula
-    drop: array_like, optional
-        Covariates to remove before regression
-
-    '''
-
-    def __init__(self,
-                 data: pd.DataFrame,
-                 treatment: str,
-                 outcome: str,
-                 coarsening: dict,
-                 relax_vars: 'array_like' = [],
-                 formula: str = None,
-                 drop: 'array_like' = [],
-                 family=None):
-        self.data = data
-        self.treatment = treatment
-        self.outcome = outcome
-        self.base_coarsening = coarsening
-        self.relax_vars = relax_vars
-        self.formula = formula
-        self.drop = drop
-        self.results = regress(data, treatment, outcome, coarsening, relax_vars, formula, drop, family)
-        if isinstance(self.results, pd.Series):  # relax_vars was empty
-            self.results['n_bins'] = None
-            self.results['var'] = None
-            self.results = pd.DataFrame([self.results]).set_index(['var', 'n_bins'])
-
-    def _sm_summary_to_frame(self, summary: 'statsmodels.Summary') -> pd.DataFrame:
-        '''Convert Summary object to DataFrame of covariate regression statistics'''
-        pd_summary = pd.read_html(summary.tables[1].as_html())[0]
-        pd_summary.iloc[0, 0] = 'covariate'
-        pd_summary.columns = pd_summary.iloc[0]
-        pd_summary = pd_summary[1:]
-        pd_summary.set_index('covariate', inplace=True)
-        return pd_summary.astype(float)
-
-    def _row_to_long(self, row: pd.Series) -> pd.DataFrame:
-        '''Convert row containing sm.Result and progressive coarsening information
-            to a DataFrame of covariate regression statistics'''
-        summary = self._sm_summary_to_frame(row['result'].summary())
-        summary['var'] = row['var']
-        summary['n_bins'] = row['n_bins']
-        summary.set_index(['n_bins', 'var'], append=True, inplace=True)
-        return summary
-
-    def expand(self) -> pd.DataFrame:
-        '''Expanded regression results'''
-        return pd.concat([self._row_to_long(row) for _, row in self.results.reset_index().iterrows()])
-
-    def _annotate(self, data: pd.DataFrame, ax: 'Axes') -> 'Axes':
-        '''P-value annotations for the progressive coarsening plot'''
-        for j, row in data.iterrows():
-            if row['P>|z|'] <= 0.01:
-                txt = '***'
-            elif row['P>|z|'] <= 0.05:
-                txt = '**'
-            elif row['P>|z|'] <= 0.1:
-                txt = '*'
-            else:
-                txt = ''
-            ax.text(row['n_bins'], row['coef'], txt, fontsize=16)
-        return ax
-
-    def plot(self, include: 'array_like' = [], stars: bool = True, legend='full') -> 'Axes':
-        '''Plot regression results from progressive coarsening
-
-        Parameters
-        ----------
-        include: array_like
-            Covariates to include in the plot
-        stars: bool
-            Whether to include the annotations indicating P-values
-        '''
-
-        lf = self.expand().reset_index()
-        if lf['var'].nunique() > 1:
-            raise Exception('Progressive coarsening plot only available for single variable.')
-        else:
-            var = lf['var'].iloc[0]
-
-        fig, ax = plt.subplots()
-        r = lf.reset_index()
-        if len(include):
-            r = r.loc[r['covariate'].isin(include), :]
-        else:
-            r = r.loc[~r['covariate'].isin(['Intercept']), :]
-
-        r['P>|z|'] = r['P>|z|'].round(2)
-
-        ax = sns.lineplot(x='n_bins', y='coef', hue='covariate', data=r, legend=False)
-
-        ax = sns.scatterplot(x='n_bins', y='coef', hue='covariate', size='P>|z|',
-                             sizes=(0, 150), data=r, ax=ax, legend=legend)
-        ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
-        if stars:
-            ax = self._annotate(r, ax)
-
-        fig.set_size_inches(12, 8)
-        ax.set_title('Regression coefficients for progressive coarsening.')
-        ax.set_ylabel('Coefficient')
-        ax.set_xlabel(f'# bins for {var} coarsening')
-        return ax
-
-    def odds_ratios(self, hue, hue_values, p=0.1, plot=True):
-        rows = []
-        lf = self.expand().reset_index(['n_bins', 'var'])
-        var = lf['var'].iloc[0]
-        for i, g in lf.groupby('n_bins'):
-            for v in hue_values:
-                base = odds(g['coef'], g['P>|z|'] <= p, **{self.treatment: False, hue: v})
-                odds_Xi = odds(g['coef'], g['P>|z|'] <= p, **{self.treatment: True, hue: v})
-                OR = odds_Xi / base
-                row = {'n_bins': i, 'OR': OR, f'{hue}': v}
-                rows.append(row)
-        res = pd.DataFrame.from_records(rows)
-        if plot:
-            ax = sns.catplot(x='n_bins', y='OR', hue=hue, data=res, kind='bar')
-            ax.set_axis_labels(f'# bins for {var} coarsening', 'Odds Ratio')
-            ax.fig.suptitle(f'Odds ratios for {self.treatment} at varying {hue} and # {var} bins')
-            ax.fig.set_size_inches(12, 8)
-        return res
+    def regress(self, coarsening: dict, formula: str, family):
+        ''' Match and regress with a single coarsening schema '''
+        return match_regress(self.data, self.treatment, self.outcome, coarsening, formula, family)
 
 
 class Relax:
@@ -508,7 +207,7 @@ class Relax:
         fig, ax = plt.subplots()
         ax = sns.lineplot(x=x, y='imbalance', data=s, style='measure', markers=True, **kwargs)
         fig.set_size_inches(12, 8)
-        ax.set_title('Multivariate L1 for progressive coarsening')
+        ax.set_title(f'Multivariate {self.measure} for progressive coarsening')
         for _, row in s.iterrows():
             ax.text(row[x] + 0.15, row['imbalance'] + 0.001, round(row['% matched'], 2), fontsize=10)
         return ax, s
@@ -539,23 +238,21 @@ class Relax:
         else:
             raise Exception(f'Unknown plot name "{name}"')
 
-# The user can use all the functions outside of the classes if they choose to
 
-
-def match(data, treatment, bins, one_to_many=True):
+def match(data, treatment, schema, one_to_many=True):
     '''Return weights for data given a coursening schema'''
-    # coarsen based on supplied bins
-    data_ = coarsen(data.copy(), bins)
+    # coarsen based on supplied schema
+    data_ = coarsen(data.copy(), schema)
 
     # weight data in non-empty strata
     if one_to_many:
-        return weight(data_, treatment)
+        return _weight(data_, treatment)
     else:
         raise NotImplementedError
         # TODO: k:k matching using bhattacharya for each stratum, weight is 1 for the control and its treatment pair
 
 
-def weight(data, treatment):
+def _weight(data, treatment):
     '''Weight observations based on global and strata populations'''
     # only keep stata with examples from each treatment level
     gb = list(data.drop(treatment, axis=1).columns.values)
@@ -612,7 +309,7 @@ def relax(data, treatment, coarsening, relax_vars, measure='l1', continuous=[], 
             n_bins = tuple(coarsening_i[i[0]]['bins'] for i in relax_vars)
         elif len(relax_vars) == 1:
             var = relax_vars[0][0]
-            n_bins = coarsening_i[relax_vars[0][0]]['bins']
+            n_bins = coarsening_i[var]['bins']
         else:
             var = None
             n_bins = None
@@ -627,52 +324,28 @@ def relax(data, treatment, coarsening, relax_vars, measure='l1', continuous=[], 
             vc = d[treatment].value_counts()
             row.update({'imbalance': score,
                         'measure': measure,
+                        'weights': weights,
                         'coarsening': coarsening_i,
                         'bins': nbins})
             row.update({f'treatment_{t}': c for t, c in vc.items()})
             if include_univariate:
-                row.update({'univariate': UnivariateBalance(d, treatment, measure, bins)})
+                row.update({'univariate': _univariate_imbalance(d, treatment, measure, bins)})
         else:
             row.update({'imbalance': 1,
                         'measure': measure,
                         'coarsening': coarsening_i,
+                        'weights': None,
                         'bins': nbins})
         rows.append(pd.Series(row))
 
     return pd.DataFrame.from_records(rows).set_index(['var', 'n_bins'])
 
 
-def regress(data, treatment, outcome, coarsening, relax_vars=[], formula=None, drop=[], family=None):
+def match_regress(data, treatment, outcome, coarsening, formula, family=None):
     '''Regress on 1 or more coarsenings and return the Results for each'''
     data_ = data.copy()
-    coarsening_ = deepcopy(coarsening)
-
-    if not formula:
-        formula = _infer_formula(data_, outcome, drop)
-
-    n_relax = len(relax_vars)
-    if n_relax > 1:
-        raise NotImplementedError('Cant handle depth>1 regression yet.')
-    elif n_relax == 1:
-        # Regress at different coarsenings
-        k = relax_vars[0][0]
-        v = relax_vars[0][1]
-        method = relax_vars[0][2]
-        rows = []
-        print(f'Regressing with {len(v)} different pd.{method} binnings on "{k}"\n')
-        for i in tqdm(v):
-            coarsening_[k].update({'bins': i, 'method': method})
-            row = regress(data_, treatment, outcome, coarsening_, formula=formula, family=family)  # recurse
-            row['n_bins'] = i
-            row['var'] = k
-            rows.append(row)
-        frame = pd.DataFrame.from_records(rows)
-        frame.set_index(['var', 'n_bins'], inplace=True)
-        return frame
-    else:
-        weights_ = match(data_.drop(outcome, axis=1), treatment, coarsening_)
-        res = _regress_matched(data_, formula, weights_, family)
-        return pd.Series({'result': res})
+    weights_ = match(data.drop(outcome, axis=1), treatment, coarsening)
+    return _regress_matched(data, formula, weights_, family)
 
 
 def _regress_matched(data, formula, weights, family):
@@ -680,13 +353,8 @@ def _regress_matched(data, formula, weights, family):
                   data=data.loc[weights > 0, :],
                   family=family,
                   var_weights=weights[weights > 0])
-    result = glm.fit(method='bfgs', maxiter=100)
+    result = glm.fit(method='bfgs', maxiter=1000)
     return result
-
-
-def _infer_formula(data, dv, drop):
-    iv = ' + '.join(data.drop([dv] + drop, axis=1).columns.values)
-    return f'{dv} ~ {iv}'
 
 
 def _cut(col, method, bins):
@@ -705,85 +373,3 @@ def coarsen(data, coarsening):
     df_coarse = data.apply(lambda x: _cut(
         x, coarsening[x.name]['cut'], coarsening[x.name]['bins']) if x.name in coarsening else x, axis=0)
     return df_coarse
-
-
-def imbalance(data, treatment, measure, bins):
-    '''Evaluate multivariate imbalance'''
-    if measure in MEASURES:
-        return MEASURES[measure](data, treatment, bins)
-    else:
-        raise NotImplementedError(f'"{measure}" not a valid measure. Choose from {list(MEASURES.keys())}')
-
-
-def _L1(data, treatment, bins):
-    def func(l, r, m, n): return np.sum(np.abs(l / m - r / n)) / 2
-    return _L(data, treatment, bins, func)
-
-
-def _L2(data, treatment, bins):
-    def func(l, r, m, n): return np.sqrt(np.sum((l / m - r / n)**2)) / 2
-    return _L(data, treatment, bins, func)
-
-
-def _L(data, treatment, bins, func):
-    '''Evaluate Multidimensional Ln score'''
-    groups = data.groupby(treatment).groups
-    data_ = data.drop(treatment, axis=1).copy()
-
-    try:
-        h = {}
-        for k, i in groups.items():
-            h[k] = np.histogramdd(data_.loc[i, :].to_numpy(), density=False, bins=bins)[0]
-        L = {}
-        for pair in map(dict, combinations(h.items(), 2)):
-            pair = OrderedDict(pair)
-            (k_left, k_right), (h_left, h_right) = pair.keys(), pair.values()  # 2 keys 2 histograms
-            L[tuple([k_left, k_right])] = func(h_left, h_right, len(groups[k_left]), len(groups[k_right]))
-
-    except Exception as e:
-        print(e)
-        return 1
-    if len(L) == 1:
-        return list(L.values())[0]
-    return L
-
-
-def get_imbalance_params(data, measure, continuous=[], H=5):
-    if measure == 'l1' or measure == 'l2':
-        return _bins_for_L(data, continuous, H)
-    else:
-        raise NotImplementedError('Only params for L variants imbalance available')
-
-
-def _bins_for_L(data, continuous, H):
-    def nbins(n, s): return min(s.nunique(), H) if n in continuous else s.nunique()
-    bin_edges = [np.histogram_bin_edges(x, bins=nbins(i, x)) for i, x in data.items()]
-    return bin_edges
-
-
-def LATE(data, treatment, outcome, weights):
-    '''(Weighted) Local Average Treatment Effect'''
-    # only currently valid for dichotamous treatments
-
-    df2 = pd.concat((data, weights.rename('weights')), axis=1)
-    df2 = df2.loc[df2['weights'] > 0, :]
-    res = OrderedDict()
-    for i, g in df2.groupby(treatment):
-        weight = g['weights'].sum()
-
-        WSOUT = (g[outcome] * g['weights']).sum()
-        wave = WSOUT / weight
-
-        ave = g[outcome].mean()
-        WSSR = (g['weights'] * (g[outcome] - ave)**2).sum()
-        wstd = np.sqrt(WSSR / weight)
-
-        res[i] = [wave, wstd, len(g)]
-
-    return res, ttest_ind_from_stats(*list(reduce(lambda x, y: x + y, res.values())), equal_var=False)
-
-
-MEASURES = {
-    'l1': _L1,
-    'l2': _L2,
-}
