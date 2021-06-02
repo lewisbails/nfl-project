@@ -102,7 +102,7 @@ thinc==7.1.1
 tornado==6.0.3
 tqdm==4.42.1
 traitlets==4.3.3
-urllib3==1.25.8
+urllib3==1.26.5
 virtualenv-clone==0.5.3
 wcwidth==0.1.8
 webencodings==0.5.1
